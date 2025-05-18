@@ -1,0 +1,15 @@
+accelerate
+transformers
+sentencepiece
+pillow
+numpy
+torchvision
+huggingface_hub
+spaces
+opencv-python
+imageio
+imageio-ffmpeg
+einops
+timm
+av
+git+https://github.com/huggingface/diffusers.git@main
