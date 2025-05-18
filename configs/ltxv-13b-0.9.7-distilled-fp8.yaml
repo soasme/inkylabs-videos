@@ -5,7 +5,7 @@ spatial_upscaler_model_path: "ltxv-spatial-upscaler-0.9.7.safetensors"
 stg_mode: "attention_values" # options: "attention_values", "attention_skip", "residual", "transformer_block"
 decode_timestep: 0.05
 decode_noise_scale: 0.025
-text_encoder_model_name_or_path: "google/t5-v1_1-large"
+text_encoder_model_name_or_path: "google-t5/t5-large"
 precision: "fp8"
 sampler: "from_checkpoint" # options: "uniform", "linear-quadratic", "from_checkpoint"
 prompt_enhancement_words_threshold: 120
