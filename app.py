@@ -11,6 +11,7 @@ import tempfile
 from PIL import Image
 from huggingface_hub import hf_hub_download
 import shutil
+import argparse
 
 from inference import (
     create_ltx_video_pipeline,
@@ -24,7 +25,21 @@ from inference import (
 from ltx_video.pipelines.pipeline_ltx_video import ConditioningItem, LTXMultiScalePipeline, LTXVideoPipeline
 from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 
-config_file_path = "configs/ltxv-13b-0.9.7-distilled.yaml"
+parser = argparse.ArgumentParser()
+parser.add_argument('--share', action='store_true')
+parser.add_argument("--server", type=str, default='0.0.0.0')
+parser.add_argument("--port", type=int, required=False)
+parser.add_argument("--mcp-server", type=int, required=True)
+parser.add_argument("--debug", type=int, required=False)
+parser.add_argument(
+    "--config",
+    type=str,
+    default="configs/ltxv-13b-0.9.7-distilled-fp8.yaml",
+    help="Path to the pipeline config YAML file"
+)
+args = parser.parse_args()
+
+config_file_path = args.config
 with open(config_file_path, "r") as file:
     PIPELINE_CONFIG_YAML = yaml.safe_load(file)
 
@@ -480,14 +495,6 @@ with gr.Blocks(css=css) as demo:
     v2v_button.click(fn=generate, inputs=v2v_inputs, outputs=[output_video, seed_input], api_name="video_to_video")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--share', action='store_true')
-    parser.add_argument("--server", type=str, default='0.0.0.0')
-    parser.add_argument("--port", type=int, required=False)
-    parser.add_argument("--mcp-server", type=int, required=True)
-    parser.add_argument("--debug", type=int, required=False)
-    args = parser.parse_args()
-
     if os.path.exists(models_dir) and os.path.isdir(models_dir):
         print(f"Model directory: {Path(models_dir).resolve()}")
     
