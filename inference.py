@@ -331,14 +331,12 @@ def create_ltx_video_pipeline(
 
     text_encoder = T5EncoderModel.from_pretrained(
         text_encoder_model_name_or_path, subfolder="text_encoder",
-        load_in_8bit=configs.get("precision") == "fp8",
-        from_tf=True,
+        from_tf=True,               # <- Important
+        torch_dtype=torch.float16,  # Optional, for lower memory use
     )
     patchifier = SymmetricPatchifier(patch_size=1)
     tokenizer = T5Tokenizer.from_pretrained(
         text_encoder_model_name_or_path, subfolder="tokenizer",
-        load_in_8bit=configs.get("precision") == "fp8",
-        from_tf=True,
     )
 
     transformer = transformer.to(device)
