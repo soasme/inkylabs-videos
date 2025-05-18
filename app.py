@@ -480,7 +480,21 @@ with gr.Blocks(css=css) as demo:
     v2v_button.click(fn=generate, inputs=v2v_inputs, outputs=[output_video, seed_input], api_name="video_to_video")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--share', action='store_true')
+    parser.add_argument("--server", type=str, default='0.0.0.0')
+    parser.add_argument("--port", type=int, required=False)
+    parser.add_argument("--mcp-server", type=int, required=True)
+    parser.add_argument("--debug", type=int, required=False)
+    args = parser.parse_args()
+
     if os.path.exists(models_dir) and os.path.isdir(models_dir):
         print(f"Model directory: {Path(models_dir).resolve()}")
     
-    demo.queue().launch(debug=True, share=False, mcp_server=True)
+    demo.queue().launch(
+        debug=args.debug,
+        share=args.share,
+        mcp_server=args.mcp_server,
+        server=args.server,
+        port=args.port,
+    )
