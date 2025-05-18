@@ -67,6 +67,7 @@ def load_image_to_tensor_with_resize_and_crop(
     just_crop: bool = False,
 ) -> torch.Tensor:
     """Load and process an image into a tensor.
+
     Args:
         image_input: Either a file path (str) or a PIL Image object
         target_height: Desired height of output tensor
@@ -330,14 +331,11 @@ def create_ltx_video_pipeline(
         )
 
     text_encoder = T5EncoderModel.from_pretrained(
-        text_encoder_model_name_or_path,
-        subfolder="text_encoder",
-        from_tf=True,
-        device_map="auto",
+        text_encoder_model_name_or_path, subfolder="text_encoder"
     )
     patchifier = SymmetricPatchifier(patch_size=1)
     tokenizer = T5Tokenizer.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="tokenizer",
+        text_encoder_model_name_or_path, subfolder="tokenizer"
     )
 
     transformer = transformer.to(device)
@@ -682,6 +680,7 @@ def prepare_conditioning(
     pipeline: LTXVideoPipeline,
 ) -> Optional[List[ConditioningItem]]:
     """Prepare conditioning items based on input media paths and their parameters.
+
     Args:
         conditioning_media_paths: List of paths to conditioning media (images or videos)
         conditioning_strengths: List of conditioning strengths for each media item
@@ -691,6 +690,7 @@ def prepare_conditioning(
         num_frames: Number of frames in the output video
         padding: Padding to apply to the frames
         pipeline: LTXVideoPipeline object used for condition video trimming
+
     Returns:
         A list of ConditioningItem objects.
     """
