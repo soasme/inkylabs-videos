@@ -502,6 +502,6 @@ if __name__ == "__main__":
         debug=args.debug,
         share=args.share,
         mcp_server=args.mcp_server,
-        server=args.server,
-        port=args.port,
+        server_name=args.server,
+        server_port=args.port,
     )
