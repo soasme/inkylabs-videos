@@ -29,7 +29,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
 parser.add_argument("--port", type=int, required=False)
-parser.add_argument("--mcp-server", type=int, required=True)
 parser.add_argument("--debug", type=int, required=False)
 parser.add_argument(
     "--config",
@@ -501,7 +500,6 @@ if __name__ == "__main__":
     demo.queue().launch(
         debug=args.debug,
         share=args.share,
-        mcp_server=args.mcp_server,
         server_name=args.server,
         server_port=args.port,
     )
