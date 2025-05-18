@@ -329,16 +329,11 @@ def create_ltx_video_pipeline(
             sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
         )
 
-    from transformers import BitsAndBytesConfig
-
-    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-
     text_encoder = T5EncoderModel.from_pretrained(
         text_encoder_model_name_or_path,
         subfolder="text_encoder",
         from_tf=True,
         device_map="auto",
-        quantization_config=quantization_config
     )
     patchifier = SymmetricPatchifier(patch_size=1)
     tokenizer = T5Tokenizer.from_pretrained(
