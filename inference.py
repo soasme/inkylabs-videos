@@ -302,7 +302,7 @@ def create_ltx_video_pipeline(
     ckpt_path: str,
     precision: str,
     text_encoder_model_name_or_path: str,
-    text_encoder_subfolder: str,
+    text_encoder_model_subfolder: str,
     sampler: Optional[str] = None,
     device: Optional[str] = None,
     enhance_prompt: bool = False,
@@ -334,12 +334,12 @@ def create_ltx_video_pipeline(
 
     text_encoder = T5EncoderModel.from_pretrained(
         text_encoder_model_name_or_path,
-        subfolder=text_encoder_subfolder,
+        subfolder=text_encoder_model_subfolder,
     )
     patchifier = SymmetricPatchifier(patch_size=1)
     tokenizer = T5Tokenizer.from_pretrained(
         text_encoder_model_name_or_path,
-        subfolder=text_encoder_subfolder,
+        subfolder=text_encoder_model_subfolder,
     )
 
     transformer = transformer.to(device)
