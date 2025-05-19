@@ -307,6 +307,7 @@ def create_ltx_video_pipeline(
     enhance_prompt: bool = False,
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,
+    high_vram: bool = False,
 ) -> LTXVideoPipeline:
     ckpt_path = Path(ckpt_path)
     assert os.path.exists(
@@ -366,6 +367,10 @@ def create_ltx_video_pipeline(
     if precision == "bfloat16" and transformer.dtype != torch.bfloat16:
         transformer = transformer.to(torch.bfloat16)
     text_encoder = text_encoder.to(torch.bfloat16)
+
+    if not high_vram:
+        vae.enable_slicing()
+        vae.enable_tiling()
 
     # Use submodels for the pipeline
     submodel_dict = {

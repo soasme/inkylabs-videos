@@ -43,6 +43,9 @@ from ltx_video.models.autoencoders.vae_encode import (
     un_normalize_latents,
     normalize_latents,
 )
+from ltx_video.pipelines.memory import (
+    cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
+)
 
 
 try:
@@ -899,6 +902,14 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask,
         )
 
+        # VRAM management: unload models if not high_vram
+        high_vram = kwargs.get("high_vram", True)
+        if not high_vram:
+            unload_complete_models(
+                self.vae, self.text_encoder, self.transformer
+            )
+
+
         # 2. Default height and width to transformer
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
@@ -1065,6 +1076,11 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask,
             text_encoder_max_tokens=text_encoder_max_tokens,
         )
+
+        # After decoding text
+        if not high_vram:
+            fake_diffusers_current_device(self.text_encoder, gpu)
+            load_model_as_complete(self.text_encoder, target_device=gpu)
 
         if offload_to_cpu and self.text_encoder is not None:
             self.text_encoder = self.text_encoder.cpu()
@@ -1281,6 +1297,11 @@ class LTXVideoPipeline(DiffusionPipeline):
                 if callback_on_step_end is not None:
                     callback_on_step_end(self, i, t, {})
 
+        # After sampling
+        if not high_vram:
+            offload_model_from_device_for_memory_preservation(self.transformer, target_device=gpu, preserved_memory_gb=8)
+            load_model_as_complete(self.vae, target_device=gpu)
+
         if offload_to_cpu:
             self.transformer = self.transformer.cpu()
             if self._execution_device == "cuda":
@@ -1327,6 +1348,10 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         else:
             image = latents
+
+        # At last
+        if not high_vram:
+            unload_complete_models()
 
         # Offload all models
         self.maybe_free_model_hooks()
