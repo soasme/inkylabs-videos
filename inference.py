@@ -308,7 +308,6 @@ def create_ltx_video_pipeline(
     enhance_prompt: bool = False,
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,
-    high_vram: bool = False,
 ) -> LTXVideoPipeline:
     ckpt_path = Path(ckpt_path)
     assert os.path.exists(
