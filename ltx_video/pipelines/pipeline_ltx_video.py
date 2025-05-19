@@ -403,6 +403,13 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
             prompt_embeds = prompt_embeds[0]
 
+            # Project to 4096 if needed
+            if prompt_embeds.shape[-1] != 4096:
+                if not hasattr(self, '_text_proj_4096'):
+                    import torch.nn as nn
+                    self._text_proj_4096 = nn.Linear(prompt_embeds.shape[-1], 4096).to(prompt_embeds.device)
+                prompt_embeds = self._text_proj_4096(prompt_embeds)
+
         if self.text_encoder is not None:
             dtype = self.text_encoder.dtype
         elif self.transformer is not None:
@@ -713,7 +720,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         ar = float(height / width)
         closest_ratio = min(ratios.keys(), key=lambda ratio: abs(float(ratio) - ar))
         default_hw = ratios[closest_ratio]
-        return int(default_hw[0]), int(default_hw[1])
+        return int(default_hw[0]), int(default_hw[1]
 
     @staticmethod
     def resize_and_crop_tensor(
