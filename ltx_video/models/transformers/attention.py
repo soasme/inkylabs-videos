@@ -994,6 +994,10 @@ class AttnProcessor2_0:
                 1, 2
             )
 
+        # Ensure hidden_states dtype matches Linear weight dtype
+        q_weight_dtype = attn.to_q.weight.dtype
+        if hidden_states.dtype != q_weight_dtype:
+            hidden_states = hidden_states.to(dtype=q_weight_dtype)
         query = attn.to_q(hidden_states)
         query = attn.q_norm(query)
 
