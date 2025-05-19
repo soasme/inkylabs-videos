@@ -405,9 +405,9 @@ class LTXVideoPipeline(DiffusionPipeline):
 
             # Project to 4096 if needed
             if prompt_embeds.shape[-1] != 4096:
-                if not hasattr(self, '_text_proj_4096'):
+                if not hasattr(self, '_text_proj_4096') or self._text_proj_4096.weight.dtype != prompt_embeds.dtype:
                     import torch.nn as nn
-                    self._text_proj_4096 = nn.Linear(prompt_embeds.shape[-1], 4096).to(prompt_embeds.device)
+                    self._text_proj_4096 = nn.Linear(prompt_embeds.shape[-1], 4096).to(device=prompt_embeds.device, dtype=prompt_embeds.dtype)
                 prompt_embeds = self._text_proj_4096(prompt_embeds)
 
         if self.text_encoder is not None:
