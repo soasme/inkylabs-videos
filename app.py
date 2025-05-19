@@ -98,9 +98,9 @@ if PIPELINE_CONFIG_YAML.get("spatial_upscaler_model_path"):
 
 target_inference_device = "cuda"
 print(f"Target inference device: {target_inference_device}")
-#pipeline_instance.to(target_inference_device)
-#if latent_upsampler_instance: 
-#    latent_upsampler_instance.to(target_inference_device)
+pipeline_instance.to(target_inference_device)
+if latent_upsampler_instance:
+    latent_upsampler_instance.to(target_inference_device)
 
 
 # --- Helper function for dimension calculation ---
