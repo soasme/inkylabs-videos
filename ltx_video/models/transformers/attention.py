@@ -688,6 +688,10 @@ class Attention(nn.Module):
         Returns:
             `torch.Tensor`: The output of the attention layer.
         """
+        # Ensure hidden_states dtype matches Linear weight dtype
+        if hidden_states.dtype != self.to_q.weight.dtype:
+            hidden_states = hidden_states.to(dtype=self.to_q.weight.dtype)
+
         # The `Attention` class can call different attention processors / attention functions
         # here we simply pass along all tensors to the selected processor class
         # For standard processors that are defined here, `**cross_attention_kwargs` is empty
@@ -995,9 +999,8 @@ class AttnProcessor2_0:
             )
 
         # Ensure hidden_states dtype matches Linear weight dtype
-        q_weight_dtype = attn.to_q.weight.dtype
-        if hidden_states.dtype != q_weight_dtype:
-            hidden_states = hidden_states.to(dtype=q_weight_dtype)
+        if hidden_states.dtype != attn.to_q.weight.dtype:
+            hidden_states = hidden_states.to(dtype=attn.to_q.weight.dtype)
         query = attn.to_q(hidden_states)
         query = attn.q_norm(query)
 
@@ -1165,6 +1168,9 @@ class AttnProcessor:
                 1, 2
             )
 
+        # Ensure hidden_states dtype matches Linear weight dtype
+        if hidden_states.dtype != attn.to_q.weight.dtype:
+            hidden_states = hidden_states.to(dtype=attn.to_q.weight.dtype)
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
