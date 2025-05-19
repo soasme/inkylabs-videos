@@ -79,6 +79,7 @@ pipeline_instance = create_ltx_video_pipeline(
     ckpt_path=PIPELINE_CONFIG_YAML["checkpoint_path"],
     precision=PIPELINE_CONFIG_YAML["precision"],
     text_encoder_model_name_or_path=PIPELINE_CONFIG_YAML["text_encoder_model_name_or_path"],
+    text_encoder_model_subfolder=PIPELINE_CONFIG_YAML["text_encoder_model_subfolder"],
     sampler=PIPELINE_CONFIG_YAML["sampler"],
     device="cpu",
     enhance_prompt=False,

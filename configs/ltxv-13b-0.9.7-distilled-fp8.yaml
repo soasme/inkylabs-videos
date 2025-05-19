@@ -6,6 +6,7 @@ stg_mode: "attention_values" # options: "attention_values", "attention_skip", "r
 decode_timestep: 0.05
 decode_noise_scale: 0.025
 text_encoder_model_name_or_path: "google-t5/t5-large"
+text_encoder_model_subfolder: ""
 precision: "fp8"
 sampler: "from_checkpoint" # options: "uniform", "linear-quadratic", "from_checkpoint"
 prompt_enhancement_words_threshold: 120

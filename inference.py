@@ -302,6 +302,7 @@ def create_ltx_video_pipeline(
     ckpt_path: str,
     precision: str,
     text_encoder_model_name_or_path: str,
+    text_encoder_subfolder: str,
     sampler: Optional[str] = None,
     device: Optional[str] = None,
     enhance_prompt: bool = False,
@@ -332,11 +333,13 @@ def create_ltx_video_pipeline(
         )
 
     text_encoder = T5EncoderModel.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="text_encoder"
+        text_encoder_model_name_or_path,
+        subfolder=text_encoder_subfolder,
     )
     patchifier = SymmetricPatchifier(patch_size=1)
     tokenizer = T5Tokenizer.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="tokenizer"
+        text_encoder_model_name_or_path,
+        subfolder=text_encoder_subfolder,
     )
 
     transformer = transformer.to(device)
@@ -367,10 +370,6 @@ def create_ltx_video_pipeline(
     if precision == "bfloat16" and transformer.dtype != torch.bfloat16:
         transformer = transformer.to(torch.bfloat16)
     text_encoder = text_encoder.to(torch.bfloat16)
-
-    if not high_vram:
-        vae.enable_slicing()
-        vae.enable_tiling()
 
     # Use submodels for the pipeline
     submodel_dict = {
