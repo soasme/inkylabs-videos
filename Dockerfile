@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Copy requirements and install dependencies
 # Install git, pkg-config, and cmake for pip requirements
-RUN apt-get update && apt-get install -y git pkg-config cmake && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libgl1 git pkg-config cmake && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
