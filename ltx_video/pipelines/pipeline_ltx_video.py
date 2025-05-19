@@ -720,7 +720,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         ar = float(height / width)
         closest_ratio = min(ratios.keys(), key=lambda ratio: abs(float(ratio) - ar))
         default_hw = ratios[closest_ratio]
-        return int(default_hw[0]), int(default_hw[1]
+        return int(default_hw[0]), int(default_hw[1])
 
     @staticmethod
     def resize_and_crop_tensor(
