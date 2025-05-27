@@ -259,7 +259,7 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
         "is_video": True,
         "vae_per_channel_normalize": True,
         "mixed_precision": (PIPELINE_CONFIG_YAML["precision"] == "mixed_precision"),
-        "offload_to_cpu": True,
+        "offload_to_cpu": False,
         "enhance_prompt": False,
     }
 
