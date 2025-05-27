@@ -268,9 +268,6 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
     call_kwargs["prompt_attention_mask"] = prompt_attention_mask
     call_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
     call_kwargs["negative_prompt_attention_mask"] = negative_attention_mask
-    # Remove prompt and negative_prompt to avoid ValueError in pipeline
-    call_kwargs.pop("prompt", None)
-    call_kwargs.pop("negative_prompt", None)
 
     stg_mode_str = PIPELINE_CONFIG_YAML.get("stg_mode", "attention_values")
     if stg_mode_str.lower() in ["stg_av", "attention_values"]:
@@ -337,9 +334,9 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
             "first_pass": first_pass_args,
             "second_pass": second_pass_args,
         })
-        # Remove prompt and negative_prompt from multi_scale_call_kwargs to avoid ValueError
-        multi_scale_call_kwargs.pop("prompt", None)
-        multi_scale_call_kwargs.pop("negative_prompt", None)
+        # Set prompt and negative_prompt to None in multi_scale_call_kwargs to avoid ValueError
+        multi_scale_call_kwargs["prompt"] = None
+        multi_scale_call_kwargs["negative_prompt"] = None
         print(f"Calling multi-scale pipeline (eff. HxW: {actual_height}x{actual_width}, Frames: {actual_num_frames} -> Padded: {num_frames_padded}) on {target_inference_device}")
         result_images_tensor = multi_scale_pipeline_obj(**multi_scale_call_kwargs).images
     else:
@@ -356,9 +353,9 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
         single_pass_call_kwargs.pop("first_pass", None) 
         single_pass_call_kwargs.pop("second_pass", None)
         single_pass_call_kwargs.pop("downscale_factor", None)
-        # Remove prompt and negative_prompt from single_pass_call_kwargs to avoid ValueError
-        single_pass_call_kwargs.pop("prompt", None)
-        single_pass_call_kwargs.pop("negative_prompt", None)
+        # Set prompt and negative_prompt to None in single_pass_call_kwargs to avoid ValueError
+        single_pass_call_kwargs["prompt"] = None
+        single_pass_call_kwargs["negative_prompt"] = None
         print(f"Calling base pipeline (padded HxW: {height_padded}x{width_padded}, Frames: {actual_num_frames} -> Padded: {num_frames_padded}) on {target_inference_device}")
         result_images_tensor = pipeline_instance(**single_pass_call_kwargs).images
 
