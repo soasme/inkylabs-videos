@@ -268,6 +268,9 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
     call_kwargs["prompt_attention_mask"] = prompt_attention_mask
     call_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
     call_kwargs["negative_prompt_attention_mask"] = negative_attention_mask
+    # Remove prompt and negative_prompt to avoid ValueError in pipeline
+    call_kwargs.pop("prompt", None)
+    call_kwargs.pop("negative_prompt", None)
 
     stg_mode_str = PIPELINE_CONFIG_YAML.get("stg_mode", "attention_values")
     if stg_mode_str.lower() in ["stg_av", "attention_values"]:
