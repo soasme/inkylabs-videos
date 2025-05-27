@@ -176,9 +176,12 @@ def encode_prompt(prompt, negative_prompt):
         prompt_input_ids = prompt_inputs.input_ids.to(target_inference_device)
         prompt_attention_mask = prompt_inputs.attention_mask.to(target_inference_device)
         prompt_embeds = text_encoder(prompt_input_ids, attention_mask=prompt_attention_mask)[0]
-        prompt_embeds = prompt_embeds.mean(dim=1)
-        if prompt_embeds.shape[-1] != 4096:
-            prompt_embeds = torch.nn.functional.pad(prompt_embeds, (0, 4096 - prompt_embeds.shape[-1]))
+        # Pad prompt_embeds to 4096 hidden dim if needed (keep [batch, seq_len, hidden_dim])
+        if prompt_embeds.shape[-1] < 4096:
+            pad_width = 4096 - prompt_embeds.shape[-1]
+            prompt_embeds = torch.nn.functional.pad(prompt_embeds, (0, pad_width))
+        elif prompt_embeds.shape[-1] > 4096:
+            prompt_embeds = prompt_embeds[..., :4096]
         # Negative prompt
         negative_inputs = tokenizer(
             negative_prompt,
@@ -190,9 +193,11 @@ def encode_prompt(prompt, negative_prompt):
         negative_input_ids = negative_inputs.input_ids.to(target_inference_device)
         negative_attention_mask = negative_inputs.attention_mask.to(target_inference_device)
         negative_prompt_embeds = text_encoder(negative_input_ids, attention_mask=negative_attention_mask)[0]
-        negative_prompt_embeds = negative_prompt_embeds.mean(dim=1)
-        if negative_prompt_embeds.shape[-1] != 4096:
-            negative_prompt_embeds = torch.nn.functional.pad(negative_prompt_embeds, (0, 4096 - negative_prompt_embeds.shape[-1]))
+        if negative_prompt_embeds.shape[-1] < 4096:
+            pad_width = 4096 - negative_prompt_embeds.shape[-1]
+            negative_prompt_embeds = torch.nn.functional.pad(negative_prompt_embeds, (0, pad_width))
+        elif negative_prompt_embeds.shape[-1] > 4096:
+            negative_prompt_embeds = negative_prompt_embeds[..., :4096]
         text_encoder.to("cpu")
         torch.cuda.empty_cache()
         return (
