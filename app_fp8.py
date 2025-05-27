@@ -337,7 +337,9 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
             "first_pass": first_pass_args,
             "second_pass": second_pass_args,
         })
-        
+        # Remove prompt and negative_prompt from multi_scale_call_kwargs to avoid ValueError
+        multi_scale_call_kwargs.pop("prompt", None)
+        multi_scale_call_kwargs.pop("negative_prompt", None)
         print(f"Calling multi-scale pipeline (eff. HxW: {actual_height}x{actual_width}, Frames: {actual_num_frames} -> Padded: {num_frames_padded}) on {target_inference_device}")
         result_images_tensor = multi_scale_pipeline_obj(**multi_scale_call_kwargs).images
     else:
@@ -349,13 +351,14 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
         single_pass_call_kwargs["stg_scale"] = first_pass_config_from_yaml.get("stg_scale")
         single_pass_call_kwargs["rescaling_scale"] = first_pass_config_from_yaml.get("rescaling_scale")
         single_pass_call_kwargs["skip_block_list"] = first_pass_config_from_yaml.get("skip_block_list")
-        
         # Remove keys that might conflict or are not used in single pass / handled by above
         single_pass_call_kwargs.pop("num_inference_steps", None) 
         single_pass_call_kwargs.pop("first_pass", None) 
         single_pass_call_kwargs.pop("second_pass", None)
         single_pass_call_kwargs.pop("downscale_factor", None)
-        
+        # Remove prompt and negative_prompt from single_pass_call_kwargs to avoid ValueError
+        single_pass_call_kwargs.pop("prompt", None)
+        single_pass_call_kwargs.pop("negative_prompt", None)
         print(f"Calling base pipeline (padded HxW: {height_padded}x{width_padded}, Frames: {actual_num_frames} -> Padded: {num_frames_padded}) on {target_inference_device}")
         result_images_tensor = pipeline_instance(**single_pass_call_kwargs).images
 
