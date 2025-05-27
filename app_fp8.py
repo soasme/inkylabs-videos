@@ -155,13 +155,21 @@ def encode_prompt(prompt, negative_prompt):
     with torch.no_grad():
         text_encoder = pipeline_instance.text_encoder
         tokenizer = pipeline_instance.tokenizer
-        # Set text_encoder dtype to match pipeline precision (bfloat16 for fp8 pipeline)
         text_encoder = text_encoder.to(dtype=torch.bfloat16, device=target_inference_device)
+        # Ensure prompt and negative_prompt are strings
+        if not isinstance(prompt, (str, list)):
+            prompt = str(prompt)
+        if not isinstance(negative_prompt, (str, list)):
+            negative_prompt = str(negative_prompt)
+        # Clamp max_length to a safe value
+        max_length = getattr(tokenizer, 'model_max_length', 512)
+        if not isinstance(max_length, int) or max_length > 4096:
+            max_length = 512
         # Prompt
         prompt_inputs = tokenizer(
             prompt,
             padding="max_length",
-            max_length=tokenizer.model_max_length,
+            max_length=max_length,
             truncation=True,
             return_tensors="pt"
         )
@@ -175,7 +183,7 @@ def encode_prompt(prompt, negative_prompt):
         negative_inputs = tokenizer(
             negative_prompt,
             padding="max_length",
-            max_length=tokenizer.model_max_length,
+            max_length=max_length,
             truncation=True,
             return_tensors="pt"
         )
@@ -185,7 +193,6 @@ def encode_prompt(prompt, negative_prompt):
         negative_prompt_embeds = negative_prompt_embeds.mean(dim=1)
         if negative_prompt_embeds.shape[-1] != 4096:
             negative_prompt_embeds = torch.nn.functional.pad(negative_prompt_embeds, (0, 4096 - negative_prompt_embeds.shape[-1]))
-        # Offload text_encoder to CPU and clear CUDA cache
         text_encoder.to("cpu")
         torch.cuda.empty_cache()
         return (
