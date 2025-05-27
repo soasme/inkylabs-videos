@@ -71,7 +71,7 @@ pipeline_instance = create_ltx_video_pipeline(
     precision=PIPELINE_CONFIG_YAML["precision"],
     text_encoder_model_name_or_path=PIPELINE_CONFIG_YAML["text_encoder_model_name_or_path"],
     sampler=PIPELINE_CONFIG_YAML["sampler"],
-    device="cpu",
+    device="cuda",
     enhance_prompt=False,
     prompt_enhancer_image_caption_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_image_caption_model_name_or_path"],
     prompt_enhancer_llm_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_llm_model_name_or_path"],
@@ -82,7 +82,7 @@ if PIPELINE_CONFIG_YAML.get("spatial_upscaler_model_path"):
     print("Creating latent upsampler on CPU...")
     latent_upsampler_instance = create_latent_upsampler(
         PIPELINE_CONFIG_YAML["spatial_upscaler_model_path"],
-        device="cpu"
+        device="cuda"
     )
     print("Latent upsampler created on CPU.")
 
@@ -198,7 +198,7 @@ def encode_prompt(prompt, negative_prompt):
             negative_prompt_embeds = torch.nn.functional.pad(negative_prompt_embeds, (0, pad_width))
         elif negative_prompt_embeds.shape[-1] > 4096:
             negative_prompt_embeds = negative_prompt_embeds[..., :4096]
-        text_encoder.to("cpu")
+        #text_encoder.to("cpu")
         torch.cuda.empty_cache()
         return (
             prompt_embeds,
