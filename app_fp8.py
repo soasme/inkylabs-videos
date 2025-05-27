@@ -549,4 +549,4 @@ if __name__ == "__main__":
     if os.path.exists(models_dir) and os.path.isdir(models_dir):
         print(f"Model directory: {Path(models_dir).resolve()}")
     
-    demo.queue().launch(debug=True, share=False, mcp_server=True)
+    demo.queue().launch(debug=True, share=False, mcp_server=False, server_name="0.0.0.0", server_port=7860)
