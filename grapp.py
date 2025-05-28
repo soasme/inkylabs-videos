@@ -316,4 +316,4 @@ with gr.Blocks(title="LTX-Video GGUF Generator") as demo:
 # Launch the app
 if __name__ == "__main__":
     demo.queue() # Enable queuing for multiple requests
-    demo.launch()
+    demo.launch(server_name='0.0.0.0', server_port=7860, debug=True)
