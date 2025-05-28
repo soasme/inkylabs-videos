@@ -8,7 +8,7 @@ import tempfile
 from PIL import Image
 
 model_path = (
-    "https://huggingface.co/calcuis/ltxv-gguf/blob/main/ltxv-13b-0.9.7-distilled-fp32-q4_0.gguf"
+    "https://huggingface.co/calcuis/ltxv-gguf/resolve/main/ltxv-2b-0.9.6-distilled-fp32-q8_0.gguf"
 )
 transformer = LTXVideoTransformer3DModel.from_single_file(
     model_path,
