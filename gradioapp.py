@@ -50,7 +50,7 @@ def generate(prompt, negative_prompt, input_image_filepath,
         width=int(width_ui),
         height=int(height_ui),
         num_frames=num_frames,
-        num_inference_steps=50,
+        num_inference_steps=100,
         guidance_scale=float(ui_guidance_scale),
         generator=generator,
     ).frames[0]
