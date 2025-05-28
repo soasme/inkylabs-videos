@@ -40,17 +40,39 @@ def generate(prompt, negative_prompt, input_image_filepath, input_video_filepath
     if randomize_seed:
         seed_ui = np.random.randint(0, 2**32 - 1)
     generator = torch.Generator(device="cuda").manual_seed(int(seed_ui))
-    # For this minimal version, ignore input_image_filepath/input_video_filepath and improve_texture_flag
-    # Use only text-to-video mode for now, as in the demo
-    video = pipe(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        width=int(width_ui),
-        height=int(height_ui),
-        num_frames=25,
-        num_inference_steps=50,
-        generator=generator,
-    ).frames[0]
+    num_frames = max(1, int(duration_ui * 12))  # 12 fps for short demo, adjust as needed
+    # Clamp num_frames to a reasonable range
+    num_frames = min(max(num_frames, 9), 65)
+    
+    if mode == "image-to-video" and input_image_filepath:
+        # Load image and convert to PIL.Image if needed
+        if isinstance(input_image_filepath, str):
+            image = Image.open(input_image_filepath).convert("RGB")
+        else:
+            image = input_image_filepath
+        video = pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            image=image,
+            width=int(width_ui),
+            height=int(height_ui),
+            num_frames=num_frames,
+            num_inference_steps=50,
+            guidance_scale=float(ui_guidance_scale),
+            generator=generator,
+        ).frames[0]
+    else:
+        # Default: text-to-video
+        video = pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=int(width_ui),
+            height=int(height_ui),
+            num_frames=num_frames,
+            num_inference_steps=50,
+            guidance_scale=float(ui_guidance_scale),
+            generator=generator,
+        ).frames[0]
     temp_dir = tempfile.mkdtemp()
     output_video_path = f"{temp_dir}/output.mp4"
     export_to_video(video, output_video_path, fps=24)
