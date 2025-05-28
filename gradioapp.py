@@ -29,9 +29,9 @@ pipe = LTXImageToVideoPipeline.from_pretrained(
     torch_dtype=torch.bfloat16
     ).to("cuda")
 
-def generate(prompt, negative_prompt, input_image_filepath, _input_video_filepath,
-             height_ui, width_ui, _mode,
-             duration_ui, _ui_frames_to_use,
+def generate(prompt, negative_prompt, input_image_filepath,
+             height_ui, width_ui,
+             duration_ui,
              seed_ui, randomize_seed, ui_guidance_scale, improve_texture_flag,
              progress=gr.Progress(track_tqdm=True)):
     if randomize_seed:
@@ -97,9 +97,9 @@ with gr.Blocks(css=css) as demo:
             height_input = gr.Slider(label="Height", value=480, step=32, minimum=256, maximum=1024, info="Must be divisible by 32.")
             width_input = gr.Slider(label="Width", value=704, step=32, minimum=256, maximum=1280, info="Must be divisible by 32.")
 
-    i2v_inputs = [i2v_prompt, negative_prompt_input, image_i2v, None,
-                  height_input, width_input, None,
-                  duration_input, None, 
+    i2v_inputs = [i2v_prompt, negative_prompt_input, image_i2v,
+                  height_input, width_input,
+                  duration_input,
                   seed_input, randomize_seed_input, guidance_scale_input, improve_texture]
     i2v_button.click(fn=generate, inputs=i2v_inputs, outputs=[output_video, seed_input], api_name="image_to_video")
 
