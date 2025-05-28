@@ -1,5 +1,6 @@
 import gradio as gr
 import torch
+import time
 from transformers import T5EncoderModel
 from diffusers import LTXPipeline, LTXVideoTransformer3DModel, GGUFQuantizationConfig
 from diffusers.utils import export_to_video
