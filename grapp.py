@@ -55,7 +55,6 @@ def load_model(quantization_config_type="q8_0", torch_dtype="bfloat16"):
         print("Loading Transformer...")
         transformer_quant_config = GGUFQuantizationConfig(
             compute_dtype=compute_dtype,
-            quantization_method=quantization_config_type # Pass quantization method explicitly if needed
         )
         transformer = LTXVideoTransformer3DModel.from_single_file(
             main_model_path,
