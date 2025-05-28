@@ -130,4 +130,4 @@ with gr.Blocks(css=css) as demo:
     v2v_button.click(fn=generate, inputs=v2v_inputs, outputs=[output_video, seed_input], api_name="video_to_video")
 
 if __name__ == "__main__":
-    demo.queue().launch(debug=True, share=False)
+    demo.queue().launch(server_name='0.0.0.0', server_port=7860, debug=True)
