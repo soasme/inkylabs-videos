@@ -811,7 +811,7 @@ def main():
     model_def = {
         "repoId" : "DeepBeepMeep/LTX_Video", 
         "sourceFolderList" :  ["T5_xxl_1.1",  ""  ],
-        "fileList" : [ ["added_tokens.json", "special_tokens_map.json", "spiece.model", "tokenizer_config.json"] + computeList(text_encoder_filename), ["ltxv_0.9.7_VAE.safetensors", "ltxv_0.9.7_spatial_upsampler.safetensors", "ltxv_scheduler.json"] + computeList(transformer_filename) ]   
+        "fileList" : [ ["added_tokens.json", "special_tokens_map.json", "spiece.model", "tokenizer_config.json"] + computeList(text_encoder_filename), ["ltxv_0.9.7_VAE.safetensors", "ltxv_0.9.7_spatial_upscaler.safetensors", "ltxv_scheduler.json"] + computeList(transformer_filename) ]   
     }
     process_files_def(**model_def)
 
