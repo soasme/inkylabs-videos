@@ -23,21 +23,21 @@ from transformers import (
 )
 from huggingface_hub import hf_hub_download
 
-from .models.autoencoders.causal_video_autoencoder import (
+from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
-from .models.transformers.symmetric_patchifier import SymmetricPatchifier
-from .models.transformers.transformer3d import Transformer3DModel
-from .pipelines.pipeline_ltx_video import (
+from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
+from ltx_video.models.transformers.transformer3d import Transformer3DModel
+from ltx_video.pipelines.pipeline_ltx_video import (
     ConditioningItem,
     LTXVideoPipeline,
     LTXMultiScalePipeline,
 )
-from .schedulers.rf import RectifiedFlowScheduler
-from .utils.skip_layer_strategy import SkipLayerStrategy
-from .models.autoencoders.latent_upsampler import LatentUpsampler
-from .pipelines import crf_compressor
-from .utils.utils import calculate_new_dimensions
+from ltx_video.schedulers.rf import RectifiedFlowScheduler
+from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
+from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
+from ltx_video.pipelines import crf_compressor
+from ltx_video.utils.utils import calculate_new_dimensions
 import cv2
 
 MAX_HEIGHT = 720
