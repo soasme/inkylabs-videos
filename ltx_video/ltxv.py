@@ -803,10 +803,9 @@ def main():
     )
 
     text_encoder_quantization = args.text_encoder_quantization
-    text_encoder_filename = get_ltxv_text_encoder_filename(text_encoder_quantization)    
+    text_encoder_filename = get_ltxv_text_encoder_filename(text_encoder_quantization)
     transformer_quantization = "int8"
     transformer_dtype_policy = ""
-
     transformer_filename = get_model_filename("ltxv_13B", transformer_quantization, transformer_dtype_policy)
     model_def = {
         "repoId" : "DeepBeepMeep/LTX_Video", 
@@ -815,16 +814,30 @@ def main():
     }
     process_files_def(**model_def)
 
-    # 1. Initialize pipeline
-    model_filepath = [args.pipeline_config] if args.pipeline_config else ["ckpts/ltxv-13b-0.9.7-distilled.safetensors"]
-    text_encoder_filepath = "ckpts/T5_xxl_1.1_enc_bf16.safetensors"  # Adjust path as needed
+    # 1. Initialize pipeline using load_ltxv_model
+    def load_ltxv_model(model_filename, quantizeTransformer = False, dtype = torch.bfloat16, VAE_dtype = torch.float32, mixed_precision_transformer = False):
+        filename = model_filename[-1]
+        print(f"Loading '{filename}' model...")
+        from ltx_video.ltxv import LTXV
+        ltxv_model = LTXV(
+            model_filepath = model_filename,
+            text_encoder_filepath = get_ltxv_text_encoder_filename(text_encoder_quantization),
+            dtype = dtype,
+            # quantizeTransformer = quantizeTransformer,
+            VAE_dtype = VAE_dtype, 
+            mixed_precision_transformer = mixed_precision_transformer
+        )
+        pipeline = ltxv_model.pipeline 
+        pipe = {"transformer" : pipeline.video_pipeline.transformer, "vae" : pipeline.vae, "text_encoder" : pipeline.video_pipeline.text_encoder, "latent_upsampler" : pipeline.latent_upsampler}
+        return ltxv_model, pipe
 
-    ltxv = LTXV(
-        model_filepath=model_filepath,
-        text_encoder_filepath=text_encoder_filepath,
+    model_filepath = [args.pipeline_config] if args.pipeline_config else ["ckpts/ltxv-13b-0.9.7-distilled.safetensors"]
+    ltxv, pipe = load_ltxv_model(
+        model_filepath,
+        quantizeTransformer=False,
         dtype=torch.bfloat16,
         VAE_dtype=torch.bfloat16,
-        mixed_precision_transformer=False,
+        mixed_precision_transformer=False
     )
 
     # 2. Prepare image/video conditioning if provided
