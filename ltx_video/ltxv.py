@@ -572,7 +572,15 @@ def load_media_file(
 # Main
 DATA_DIR = "ckpts"
 from huggingface_hub import hf_hub_download, snapshot_download 
-
+def get_ltxv_text_encoder_filename(text_encoder_quantization):
+    text_encoder_filename = "ckpts/T5_xxl_1.1/T5_xxl_1.1_enc_bf16.safetensors"
+    if text_encoder_quantization =="int8":
+        text_encoder_filename = text_encoder_filename.replace("bf16", "quanto_bf16_int8") 
+    return text_encoder_filename
+def computeList(filename):
+    pos = filename.rfind("/")
+    filename = filename[pos+1:]
+    return [filename] 
 def process_files_def(repoId, sourceFolderList, fileList):
     targetRoot = "ckpts/" 
     for sourceFolder, files in zip(sourceFolderList,fileList ):
@@ -693,6 +701,13 @@ def main():
         nargs="*",
         help="List of frame indices where each conditioning item should be applied. Must match the number of conditioning items.",
     )
+    parser.add_argument(
+        "--text_encoder_quantization",
+        type=str,
+        default="int8",
+        choices=["int8", "fp16"],
+        help="Quantization type for text encoder: 'int8' (default) or 'fp16'",
+    )
 
     args = parser.parse_args()
     logger.warning(f"Running generation with arguments: {args}")
@@ -703,13 +718,35 @@ def main():
         sourceFolderList=["Florence2", "Llama3_2"],
         fileList=[
             [
-                "config.json", "configuration_florence2.py", "model.safetensors", "modeling_florence2.py", "preprocessor_config.json", "processing_florence2.py", "tokenizer.json", "tokenizer_config.json"
+                "config.json",
+                "configuration_florence2.py",
+                "model.safetensors",
+                "modeling_florence2.py",
+                "preprocessor_config.json",
+                "processing_florence2.py",
+                "tokenizer.json",
+                "tokenizer_config.json"
             ],
             [
-                "config.json", "generation_config.json", "Llama3_2_quanto_bf16_int8.safetensors", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"
+                "config.json",
+                "generation_config.json",
+                "Llama3_2_quanto_bf16_int8.safetensors",
+                "special_tokens_map.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
             ]
         ]
     )
+
+    text_encoder_quantization = args.text_encoder_quantization
+    text_encoder_filename = get_ltxv_text_encoder_filename(text_encoder_quantization)    
+    model_def = {
+        "repoId" : "DeepBeepMeep/LTX_Video", 
+        "sourceFolderList" :  ["T5_xxl_1.1",  ""  ],
+        "fileList" : [ ["added_tokens.json", "special_tokens_map.json", "spiece.model", "tokenizer_config.json"] + computeList(text_encoder_filename), ["ltxv_0.9.7_VAE.safetensors", "ltxv_0.9.7_spatial_upsampler.safetensors", "ltxv_scheduler.json"] + computeList(transformer_filename) ]   
+    }
+    process_files_def(**model_def)
+
     # 1. Initialize pipeline
     model_filepath = [args.pipeline_config] if args.pipeline_config else ["ckpts/ltxv-13b-0.9.7-distilled.safetensors"]
     text_encoder_filepath = "ckpts/T5_xxl_1.1_enc_bf16.safetensors"  # Adjust path as needed
