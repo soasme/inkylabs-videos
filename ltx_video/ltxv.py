@@ -572,11 +572,75 @@ def load_media_file(
 # Main
 DATA_DIR = "ckpts"
 from huggingface_hub import hf_hub_download, snapshot_download 
+major, minor = torch.cuda.get_device_capability(None)
+if  major < 8:
+    print("Switching to FP16 models when possible as GPU architecture doesn't support optimed BF16 Kernels")
+    bfloat16_supported = False
+else:
+    bfloat16_supported = True
+model_signatures = {"t2v": "text2video_14B", "t2v_1.3B" : "text2video_1.3B",   "fun_inp_1.3B" : "Fun_InP_1.3B",  "fun_inp" :  "Fun_InP_14B", 
+                    "i2v" : "image2video_480p", "i2v_720p" : "image2video_720p" , "vace_1.3B" : "Vace_1.3B", "vace_14B" : "Vace_14B","recam_1.3B": "recammaster_1.3B", 
+                    "flf2v_720p" : "FLF2V_720p", "sky_df_1.3B" : "sky_reels2_diffusion_forcing_1.3B", "sky_df_14B" : "sky_reels2_diffusion_forcing_14B", 
+                    "sky_df_720p_14B" : "sky_reels2_diffusion_forcing_720p_14B",  "moviigen" :"moviigen",
+                    "phantom_1.3B" : "phantom_1.3B", "phantom_14B" : "phantom_14B", "fantasy" : "fantasy", "ltxv_13B" : "ltxv_0.9.7_13B_dev", "ltxv_13B_distilled" : "ltxv_0.9.7_13B_distilled", 
+                    "hunyuan" : "hunyuan_video_720", "hunyuan_i2v" : "hunyuan_video_i2v_720", "hunyuan_custom" : "hunyuan_video_custom", "hunyuan_avatar" : "hunyuan_video_avatar"  }
+transformer_choices = ["ckpts/ltxv_0.9.7_13B_dev_bf16.safetensors", "ckpts/ltxv_0.9.7_13B_dev_quanto_bf16_int8.safetensors", "ckpts/ltxv_0.9.7_13B_distilled_lora128_bf16.safetensors"]
+def get_model_family(model_filename):
+    if "wan" in model_filename or "sky" in model_filename:
+        return "wan"
+    elif "ltxv" in model_filename:
+        return "ltxv"
+    elif "hunyuan" in model_filename:
+        return "hunyuan"
+    else:
+        raise Exception(f"Unknown model family for model'{model_filename}'")
 def get_ltxv_text_encoder_filename(text_encoder_quantization):
     text_encoder_filename = "ckpts/T5_xxl_1.1/T5_xxl_1.1_enc_bf16.safetensors"
     if text_encoder_quantization =="int8":
         text_encoder_filename = text_encoder_filename.replace("bf16", "quanto_bf16_int8") 
     return text_encoder_filename
+def get_model_filename(model_type, quantization ="int8", dtype_policy = ""):
+    signature = model_signatures[model_type]
+    choices = [ name for name in transformer_choices if signature in name]
+    if len(quantization) == 0:
+        quantization = "bf16"
+
+    model_family =  get_model_family(choices[0]) 
+    dtype = get_transformer_dtype(model_family, dtype_policy)
+    if len(choices) <= 1:
+        raw_filename = choices[0]
+    else:
+        sub_choices = [ name for name in choices if quantization in name]
+        if len(sub_choices) > 0:
+            dtype_str = "fp16" if dtype == torch.float16 else "bf16"
+            new_sub_choices = [ name for name in sub_choices if dtype_str in name]
+            sub_choices = new_sub_choices if len(new_sub_choices) > 0 else sub_choices
+            raw_filename = sub_choices[0]
+        else:
+            raw_filename = choices[0]
+
+    if dtype == torch.float16 and not "fp16" in raw_filename and model_family == "wan" :
+        if "quanto_int8" in raw_filename:
+            raw_filename = raw_filename.replace("quanto_int8", "quanto_fp16_int8")
+        elif "quanto_bf16_int8" in raw_filename:
+            raw_filename = raw_filename.replace("quanto_bf16_int8", "quanto_fp16_int8")
+        elif "quanto_mbf16_int8" in raw_filename:
+            raw_filename= raw_filename.replace("quanto_mbf16_int8", "quanto_mfp16_int8")
+    return raw_filename
+def get_transformer_dtype(model_family, transformer_dtype_policy):
+    if len(transformer_dtype_policy) == 0:
+        if not bfloat16_supported:
+            return torch.float16
+        else:
+            if model_family == "wan"and False:
+                return torch.float16
+            else: 
+                return torch.bfloat16
+        return transformer_dtype
+    elif transformer_dtype_policy =="fp16":
+        return torch.float16
+    else:
+        return torch.bfloat16
 def computeList(filename):
     pos = filename.rfind("/")
     filename = filename[pos+1:]
@@ -740,6 +804,10 @@ def main():
 
     text_encoder_quantization = args.text_encoder_quantization
     text_encoder_filename = get_ltxv_text_encoder_filename(text_encoder_quantization)    
+    transformer_quantization = "int8"
+    transformer_dtype_policy = ""
+
+    transformer_filename = get_model_filename("ltxv_13B", transformer_quantization, transformer_dtype_policy)
     model_def = {
         "repoId" : "DeepBeepMeep/LTX_Video", 
         "sourceFolderList" :  ["T5_xxl_1.1",  ""  ],
