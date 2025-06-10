@@ -13,3 +13,4 @@ einops
 timm
 av
 git+https://github.com/huggingface/diffusers.git@main
+mmgp
