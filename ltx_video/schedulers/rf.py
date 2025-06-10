@@ -262,6 +262,12 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
 
     @staticmethod
     def from_pretrained(pretrained_model_path: Union[str, os.PathLike]):
+        with open(pretrained_model_path, "r", encoding="utf-8") as reader:
+            text = reader.read()
+
+        config = json.loads(text)
+        return RectifiedFlowScheduler.from_config(config)
+
         pretrained_model_path = Path(pretrained_model_path)
         if pretrained_model_path.is_file():
             comfy_single_file_state_dict = {}
@@ -272,7 +278,7 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
             configs = json.loads(metadata["config"])
             config = configs["scheduler"]
             del comfy_single_file_state_dict
-
+  
         elif pretrained_model_path.is_dir():
             diffusers_noise_scheduler_config_path = (
                 pretrained_model_path / "scheduler" / "scheduler_config.json"

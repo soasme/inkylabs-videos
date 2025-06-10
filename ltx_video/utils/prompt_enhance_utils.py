@@ -67,12 +67,12 @@ def generate_cinematic_prompt(
     prompt_enhancer_model,
     prompt_enhancer_tokenizer,
     prompt: Union[str, List[str]],
-    conditioning_items: Optional[List] = None,
+    images: Optional[List] = None,
     max_new_tokens: int = 256,
 ) -> List[str]:
     prompts = [prompt] if isinstance(prompt, str) else prompt
 
-    if conditioning_items is None:
+    if images is None:
         prompts = _generate_t2v_prompt(
             prompt_enhancer_model,
             prompt_enhancer_tokenizer,
@@ -81,20 +81,6 @@ def generate_cinematic_prompt(
             T2V_CINEMATIC_PROMPT,
         )
     else:
-        if len(conditioning_items) > 1 or conditioning_items[0].media_frame_number != 0:
-            logger.warning(
-                "prompt enhancement does only support unconditional or first frame of conditioning items, returning original prompts"
-            )
-            return prompts
-
-        first_frame_conditioning_item = conditioning_items[0]
-        first_frames = _get_first_frames_from_conditioning_item(
-            first_frame_conditioning_item
-        )
-
-        assert len(first_frames) == len(
-            prompts
-        ), "Number of conditioning frames must match number of prompts"
 
         prompts = _generate_i2v_prompt(
             image_caption_model,
@@ -102,7 +88,7 @@ def generate_cinematic_prompt(
             prompt_enhancer_model,
             prompt_enhancer_tokenizer,
             prompts,
-            first_frames,
+            images,
             max_new_tokens,
             I2V_CINEMATIC_PROMPT,
         )
@@ -139,14 +125,15 @@ def _generate_t2v_prompt(
         )
         for m in messages
     ]
-    model_inputs = prompt_enhancer_tokenizer(texts, return_tensors="pt").to(
-        prompt_enhancer_model.device
-    )
 
-    return _generate_and_decode_prompts(
-        prompt_enhancer_model, prompt_enhancer_tokenizer, model_inputs, max_new_tokens
-    )
+    out_prompts = []
+    for text in texts:
+        model_inputs = prompt_enhancer_tokenizer(text, return_tensors="pt").to(
+            prompt_enhancer_model.device
+        )
+        out_prompts.append(_generate_and_decode_prompts(prompt_enhancer_model, prompt_enhancer_tokenizer, model_inputs, max_new_tokens)[0])
 
+    return out_prompts
 
 def _generate_i2v_prompt(
     image_caption_model,
@@ -161,7 +148,8 @@ def _generate_i2v_prompt(
     image_captions = _generate_image_captions(
         image_caption_model, image_caption_processor, first_frames
     )
-
+    if len(image_captions) == 1 and len(image_captions) < len(prompts):
+        image_captions *= len(prompts)
     messages = [
         [
             {"role": "system", "content": system_prompt},
@@ -176,13 +164,14 @@ def _generate_i2v_prompt(
         )
         for m in messages
     ]
-    model_inputs = prompt_enhancer_tokenizer(texts, return_tensors="pt").to(
-        prompt_enhancer_model.device
-    )
+    out_prompts = []
+    for text in texts:
+        model_inputs = prompt_enhancer_tokenizer(text, return_tensors="pt").to(
+            prompt_enhancer_model.device
+        )
+        out_prompts.append(_generate_and_decode_prompts(prompt_enhancer_model, prompt_enhancer_tokenizer, model_inputs, max_new_tokens)[0])
 
-    return _generate_and_decode_prompts(
-        prompt_enhancer_model, prompt_enhancer_tokenizer, model_inputs, max_new_tokens
-    )
+    return out_prompts
 
 
 def _generate_image_captions(
@@ -194,7 +183,7 @@ def _generate_image_captions(
     image_caption_prompts = [system_prompt] * len(images)
     inputs = image_caption_processor(
         image_caption_prompts, images, return_tensors="pt"
-    ).to(image_caption_model.device)
+    ).to("cuda") #.to(image_caption_model.device)
 
     with torch.inference_mode():
         generated_ids = image_caption_model.generate(
@@ -213,7 +202,7 @@ def _generate_and_decode_prompts(
 ) -> List[str]:
     with torch.inference_mode():
         outputs = prompt_enhancer_model.generate(
-            **model_inputs, max_new_tokens=max_new_tokens
+            **model_inputs,  max_new_tokens=max_new_tokens
         )
         generated_ids = [
             output_ids[len(input_ids) :]

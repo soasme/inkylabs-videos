@@ -16,9 +16,7 @@ from diffusers.utils import BaseOutput, is_torch_version
 from diffusers.utils import logging
 from torch import nn
 from safetensors import safe_open
-
-
-from ltx_video.models.transformers.attention import BasicTransformerBlock
+from ltx_video.models.transformers.attention import BasicTransformerBlock, reshape_hidden_states, restore_hidden_states_shape
 from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 
 from ltx_video.utils.diffusers_config_mapping import (
@@ -268,7 +266,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                 for key, value in state_dict.items()
                 if key.startswith("model.diffusion_model.")
             }
-        super().load_state_dict(state_dict, **kwargs)
+        return super().load_state_dict(state_dict, **kwargs)
 
     @classmethod
     def from_pretrained(
@@ -330,7 +328,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        indices_grid: torch.Tensor,
+        freqs_cis: list,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         timestep: Optional[torch.LongTensor] = None,
         class_labels: Optional[torch.LongTensor] = None,
@@ -339,6 +337,10 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         skip_layer_mask: Optional[torch.Tensor] = None,
         skip_layer_strategy: Optional[SkipLayerStrategy] = None,
+        latent_shape = None,
+        joint_pass = True,
+        ltxv_model = None,
+        mixed = False,
         return_dict: bool = True,
     ):
         """
@@ -418,7 +420,9 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep
 
-        freqs_cis = self.precompute_freqs_cis(indices_grid)
+        if timestep.shape[-1] > 1:
+            timestep = timestep.reshape(timestep.shape[0], -1, latent_shape[-2] * latent_shape[-1] )
+            timestep = timestep[:, :, 0]
 
         batch_size = hidden_states.shape[0]
         timestep, embedded_timestep = self.adaln_single(
@@ -432,6 +436,11 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         embedded_timestep = embedded_timestep.view(
             batch_size, -1, embedded_timestep.shape[-1]
         )
+        if mixed:
+            timestep = timestep.float()
+            embedded_timestep = embedded_timestep.float()
+            hidden_states = hidden_states.float() 
+ 
 
         # 2. Blocks
         if self.caption_projection is not None:
@@ -441,40 +450,9 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                 batch_size, -1, hidden_states.shape[-1]
             )
 
-        for block_idx, block in enumerate(self.transformer_blocks):
-            if self.training and self.gradient_checkpointing:
 
-                def create_custom_forward(module, return_dict=None):
-                    def custom_forward(*inputs):
-                        if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
-                        else:
-                            return module(*inputs)
-
-                    return custom_forward
-
-                ckpt_kwargs: Dict[str, Any] = (
-                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                )
-                hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    hidden_states,
-                    freqs_cis,
-                    attention_mask,
-                    encoder_hidden_states,
-                    encoder_attention_mask,
-                    timestep,
-                    cross_attention_kwargs,
-                    class_labels,
-                    (
-                        skip_layer_mask[block_idx]
-                        if skip_layer_mask is not None
-                        else None
-                    ),
-                    skip_layer_strategy,
-                    **ckpt_kwargs,
-                )
-            else:
+        if joint_pass:
+            for block_idx, block in enumerate(self.transformer_blocks):
                 hidden_states = block(
                     hidden_states,
                     freqs_cis=freqs_cis,
@@ -484,22 +462,44 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                     timestep=timestep,
                     cross_attention_kwargs=cross_attention_kwargs,
                     class_labels=class_labels,
-                    skip_layer_mask=(
-                        skip_layer_mask[block_idx]
-                        if skip_layer_mask is not None
-                        else None
-                    ),
+                    skip_layer_mask= None if skip_layer_mask is None else skip_layer_mask[block_idx],
                     skip_layer_strategy=skip_layer_strategy,
                 )
+                if ltxv_model._interrupt:
+                    return [None]
+
+        else:
+            for block_idx, block in enumerate(self.transformer_blocks):
+                for i, (one_hidden_states, one_encoder_hidden_states, one_encoder_attention_mask,one_timestep) in enumerate(zip(hidden_states, encoder_hidden_states,encoder_attention_mask,timestep)):
+                    hidden_states[i][...] = block(
+                        one_hidden_states.unsqueeze(0),
+                        freqs_cis=freqs_cis,
+                        attention_mask=attention_mask,
+                        encoder_hidden_states=one_encoder_hidden_states.unsqueeze(0),
+                        encoder_attention_mask=one_encoder_attention_mask.unsqueeze(0),
+                        timestep=one_timestep.unsqueeze(0),
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        class_labels=class_labels,
+                        skip_layer_mask= None if skip_layer_mask is None else skip_layer_mask[block_idx, i],
+                        skip_layer_strategy=skip_layer_strategy,
+                    )
+                    if ltxv_model._interrupt:
+                        return [None]
 
         # 3. Output
         scale_shift_values = (
             self.scale_shift_table[None, None] + embedded_timestep[:, :, None]
         )
-        shift, scale = scale_shift_values[:, :, 0], scale_shift_values[:, :, 1]
+        shift, scale = scale_shift_values[:, :, 0].unsqueeze(-2), scale_shift_values[:, :, 1].unsqueeze(-2)
         hidden_states = self.norm_out(hidden_states)
         # Modulation
-        hidden_states = hidden_states * (1 + scale) + shift
+        
+
+        hidden_states = reshape_hidden_states(hidden_states, scale.shape[1])
+        # hidden_states = hidden_states * (1 + scale)
+        hidden_states *= 1 + scale
+        hidden_states += shift
+        hidden_states = restore_hidden_states_shape(hidden_states)
         hidden_states = self.proj_out(hidden_states)
         if not return_dict:
             return (hidden_states,)

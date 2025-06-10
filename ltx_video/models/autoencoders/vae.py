@@ -40,6 +40,18 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
     ):
         super().__init__()
 
+
+        self.per_channel_statistics = nn.Module()
+        std_of_means = torch.zeros( (128,), dtype= torch.bfloat16)
+
+        self.per_channel_statistics.register_buffer("std-of-means", std_of_means)
+        self.per_channel_statistics.register_buffer(
+            "mean-of-means",
+                torch.zeros_like(std_of_means)
+        )
+        
+
+
         # pass init params to Encoder
         self.encoder = encoder
         self.use_quant_conv = use_quant_conv
@@ -76,13 +88,40 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
         # only relevant if vae tiling is enabled
         self.set_tiling_params(sample_size=sample_size, overlap_factor=0.25)
 
+    @staticmethod
+    def get_VAE_tile_size(vae_config, device_mem_capacity, mixed_precision):
+
+        z_tile = 4
+        # VAE Tiling
+        if vae_config == 0:
+            if mixed_precision:
+                device_mem_capacity = device_mem_capacity / 1.5
+            if device_mem_capacity >= 24000:
+                use_vae_config = 1            
+            elif device_mem_capacity >= 8000:
+                use_vae_config = 2
+            else:          
+                use_vae_config = 3
+        else:
+            use_vae_config = vae_config
+
+        if use_vae_config == 1:
+            hw_tile = 0 
+        elif use_vae_config == 2:
+            hw_tile = 512  
+        else: 
+            hw_tile = 256  
+
+        return  (z_tile, hw_tile)
+
     def set_tiling_params(self, sample_size: int = 512, overlap_factor: float = 0.25):
         self.tile_sample_min_size = sample_size
         num_blocks = len(self.encoder.down_blocks)
-        self.tile_latent_min_size = int(sample_size / (2 ** (num_blocks - 1)))
+        # self.tile_latent_min_size = int(sample_size / (2 ** (num_blocks - 1)))
+        self.tile_latent_min_size = int(sample_size / 32)
         self.tile_overlap_factor = overlap_factor
 
-    def enable_z_tiling(self, z_sample_size: int = 8):
+    def enable_z_tiling(self, z_sample_size: int = 4):
         r"""
         Enable tiling during VAE decoding.
 
@@ -92,8 +131,8 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
         self.use_z_tiling = z_sample_size > 1
         self.z_sample_size = z_sample_size
         assert (
-            z_sample_size % 8 == 0 or z_sample_size == 1
-        ), f"z_sample_size must be a multiple of 8 or 1. Got {z_sample_size}."
+            z_sample_size % 4 == 0 or z_sample_size == 1
+        ), f"z_sample_size must be a multiple of 4 or 1. Got {z_sample_size}."
 
     def disable_z_tiling(self):
         r"""
@@ -181,7 +220,7 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
             ) + b[:, :, :, :, x] * (x / blend_extent)
         return b
 
-    def _hw_tiled_decode(self, z: torch.FloatTensor, target_shape):
+    def _hw_tiled_decode(self, z: torch.FloatTensor, target_shape, timestep = None):
         overlap_size = int(self.tile_latent_min_size * (1 - self.tile_overlap_factor))
         blend_extent = int(self.tile_sample_min_size * self.tile_overlap_factor)
         row_limit = self.tile_sample_min_size - blend_extent
@@ -204,7 +243,7 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
                     j : j + self.tile_latent_min_size,
                 ]
                 tile = self.post_quant_conv(tile)
-                decoded = self.decoder(tile, target_shape=tile_target_shape)
+                decoded = self.decoder(tile, target_shape=tile_target_shape, timestep = timestep)
                 row.append(decoded)
             rows.append(row)
         result_rows = []
@@ -226,29 +265,41 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
     def encode(
         self, z: torch.FloatTensor, return_dict: bool = True
     ) -> Union[DecoderOutput, torch.FloatTensor]:
-        if self.use_z_tiling and z.shape[2] > self.z_sample_size > 1:
-            num_splits = z.shape[2] // self.z_sample_size
-            sizes = [self.z_sample_size] * num_splits
-            sizes = (
-                sizes + [z.shape[2] - sum(sizes)]
-                if z.shape[2] - sum(sizes) > 0
-                else sizes
-            )
-            tiles = z.split(sizes, dim=2)
-            moments_tiles = [
-                (
-                    self._hw_tiled_encode(z_tile, return_dict)
-                    if self.use_hw_tiling
-                    else self._encode(z_tile)
-                )
-                for z_tile in tiles
-            ]
-            moments = torch.cat(moments_tiles, dim=2)
+        if self.use_z_tiling and z.shape[2] > (self.z_sample_size + 1) > 1:
+            tile_latent_min_tsize = self.z_sample_size 
+            tile_sample_min_tsize = tile_latent_min_tsize *  8 
+            tile_overlap_factor = 0.25
+
+            B, C, T, H, W = z.shape
+            overlap_size = int(tile_sample_min_tsize * (1 - tile_overlap_factor))
+            blend_extent = int(tile_latent_min_tsize * tile_overlap_factor)
+            t_limit = tile_latent_min_tsize - blend_extent
+
+            row = []
+            for i in range(0, T, overlap_size):
+                tile = z[:, :, i: i + tile_sample_min_tsize + 1, :, :]
+                if self.use_hw_tiling:
+                    tile = self._hw_tiled_encode(tile, return_dict)
+                else:
+                    tile = self._encode(tile)
+                if i > 0:
+                    tile = tile[:, :, 1:, :, :]
+                row.append(tile)
+            result_row = []
+            for i, tile in enumerate(row):
+                if i > 0:
+                    tile = self.blend_z(row[i - 1], tile, blend_extent)
+                    result_row.append(tile[:, :, :t_limit, :, :])
+                else:
+                    result_row.append(tile[:, :, :t_limit + 1, :, :])
+
+            moments = torch.cat(result_row, dim=2)
+
 
         else:
             moments = (
                 self._hw_tiled_encode(z, return_dict)
-                if self.use_hw_tiling
+                if self.use_hw_tiling and z.shape[2] > 1 
                 else self._encode(z)
             )
 
@@ -311,35 +362,47 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
         timestep: Optional[torch.Tensor] = None,
     ) -> Union[DecoderOutput, torch.FloatTensor]:
         assert target_shape is not None, "target_shape must be provided for decoding"
-        if self.use_z_tiling and z.shape[2] > self.z_sample_size > 1:
-            reduction_factor = int(
-                self.encoder.patch_size_t
-                * 2
-                ** (
-                    len(self.encoder.down_blocks)
-                    - 1
-                    - math.sqrt(self.encoder.patch_size)
-                )
-            )
-            split_size = self.z_sample_size // reduction_factor
-            num_splits = z.shape[2] // split_size
+        if self.use_z_tiling and z.shape[2] > (self.z_sample_size + 1) > 1:
+        # Split z into overlapping tiles and decode them separately.
+            tile_latent_min_tsize = self.z_sample_size 
+            tile_sample_min_tsize = tile_latent_min_tsize *  8 
+            tile_overlap_factor = 0.25
 
-            # copy target shape, and divide frame dimension (=2) by the context size
-            target_shape_split = list(target_shape)
-            target_shape_split[2] = target_shape[2] // num_splits
+            B, C, T, H, W = z.shape
+            overlap_size = int(tile_latent_min_tsize * (1 - tile_overlap_factor))
+            blend_extent = int(tile_sample_min_tsize * tile_overlap_factor)
+            t_limit = tile_sample_min_tsize - blend_extent
 
-            decoded_tiles = [
-                (
-                    self._hw_tiled_decode(z_tile, target_shape_split)
-                    if self.use_hw_tiling
-                    else self._decode(z_tile, target_shape=target_shape_split)
-                )
-                for z_tile in torch.tensor_split(z, num_splits, dim=2)
-            ]
-            decoded = torch.cat(decoded_tiles, dim=2)
+            row = []
+            for i in range(0, T, overlap_size):
+                tile = z[:, :, i: i + tile_latent_min_tsize + 1, :, :]
+                target_shape_split = list(target_shape)
+                target_shape_split[2] = tile.shape[2] * 8                
+                if self.use_hw_tiling:
+                    decoded = self._hw_tiled_decode(tile, target_shape, timestep)
+                else:
+                    decoded = self._decode(tile, target_shape=target_shape, timestep=timestep)
+
+                if i > 0:
+                    decoded = decoded[:, :, 1:, :, :]
+                row.append(decoded.to(torch.float16).cpu())
+                decoded = None
+            result_row = []
+            for i, tile in enumerate(row):
+                if i > 0:
+                    tile = self.blend_z(row[i - 1], tile, blend_extent)
+                    result_row.append(tile[:, :, :t_limit, :, :])
+                else:
+                    result_row.append(tile[:, :, :t_limit + 1, :, :])
+
+            dec = torch.cat(result_row, dim=2)
+            if not return_dict:
+                return (dec,)
+
+            return DecoderOutput(sample=dec)            
         else:
             decoded = (
-                self._hw_tiled_decode(z, target_shape)
+                self._hw_tiled_decode(z, target_shape, timestep)
                 if self.use_hw_tiling
                 else self._decode(z, target_shape=target_shape, timestep=timestep)
             )

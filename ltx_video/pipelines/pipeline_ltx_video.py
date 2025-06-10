@@ -45,11 +45,6 @@ from ltx_video.models.autoencoders.vae_encode import (
 )
 
 
-try:
-    import torch_xla.distributed.spmd as xs
-except ImportError:
-    xs = None
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -132,6 +127,7 @@ def retrieve_timesteps(
     num_inference_steps: Optional[int] = None,
     device: Optional[Union[str, torch.device]] = None,
     timesteps: Optional[List[int]] = None,
+    max_timestep: Optional[float] = 1.0,
     skip_initial_inference_steps: int = 0,
     skip_final_inference_steps: int = 0,
     **kwargs,
@@ -176,21 +172,29 @@ def retrieve_timesteps(
         scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
         timesteps = scheduler.timesteps
 
-        if (
-            skip_initial_inference_steps < 0
-            or skip_final_inference_steps < 0
-            or skip_initial_inference_steps + skip_final_inference_steps
-            >= num_inference_steps
-        ):
-            raise ValueError(
-                "invalid skip inference step values: must be non-negative and the sum of skip_initial_inference_steps and skip_final_inference_steps must be less than the number of inference steps"
-            )
+    if (
+        skip_initial_inference_steps < 0
+        or skip_final_inference_steps < 0
+        or skip_initial_inference_steps + skip_final_inference_steps
+        >= num_inference_steps
+    ):
+        raise ValueError(
+            f"max_timestep {max_timestep} is smaller than the minimum timestep {timesteps.min()}"
+            "invalid skip inference step values: must be non-negative and the sum of skip_initial_inference_steps and skip_final_inference_steps must be less than the number of inference steps"
+        )
 
-        timesteps = timesteps[
-            skip_initial_inference_steps : len(timesteps) - skip_final_inference_steps
-        ]
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        num_inference_steps = len(timesteps)
+    timesteps = timesteps[
+        skip_initial_inference_steps : len(timesteps) - skip_final_inference_steps
+    ]    
+
+    if max_timestep < 1.0:
+        if max_timestep < timesteps.min():
+            raise ValueError(
+                f"max_timestep {max_timestep} is smaller than the minimum timestep {timesteps.min()}"
+            )
+        timesteps = timesteps[timesteps <= max_timestep]
+    num_inference_steps = len(timesteps)
+    scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
 
     return timesteps, num_inference_steps
 
@@ -763,13 +767,10 @@ class LTXVideoPipeline(DiffusionPipeline):
         num_frames: int,
         frame_rate: float,
         prompt: Union[str, List[str]] = None,
-        negative_prompt: str = "",
+        negative_prompt: str = None,
         num_inference_steps: int = 20,
-        skip_initial_inference_steps: int = 0,
-        skip_final_inference_steps: int = 0,
         timesteps: List[int] = None,
         guidance_scale: Union[float, List[float]] = 4.5,
-        cfg_star_rescale: bool = False,
         skip_layer_strategy: Optional[SkipLayerStrategy] = None,
         skip_block_list: Optional[Union[List[List[int]], List[int]]] = None,
         stg_scale: Union[float, List[float]] = 1.0,
@@ -795,6 +796,13 @@ class LTXVideoPipeline(DiffusionPipeline):
         text_encoder_max_tokens: int = 256,
         stochastic_sampling: bool = False,
         media_items: Optional[torch.Tensor] = None,
+        strength: Optional[float] = 1.0,
+        skip_initial_inference_steps: int = 0,
+        skip_final_inference_steps: int = 0,        
+        joint_pass: bool = False,
+        pass_no: int = -1,
+        ltxv_model = None,
+        callback=None,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
         """
@@ -811,12 +819,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             num_inference_steps (`int`, *optional*, defaults to 100):
                 The number of denoising steps. More denoising steps usually lead to a higher quality image at the
                 expense of slower inference. If `timesteps` is provided, this parameter is ignored.
-            skip_initial_inference_steps (`int`, *optional*, defaults to 0):
-                The number of initial timesteps to skip. After calculating the timesteps, this number of timesteps will
-                be removed from the beginning of the timesteps list. Meaning the highest-timesteps values will not run.
-            skip_final_inference_steps (`int`, *optional*, defaults to 0):
-                The number of final timesteps to skip. After calculating the timesteps, this number of timesteps will
-                be removed from the end of the timesteps list. Meaning the lowest-timesteps values will not run.
             timesteps (`List[int]`, *optional*):
                 Custom timesteps to use for the denoising process. If not defined, equal spaced `num_inference_steps`
                 timesteps are used. Must be in descending order.
@@ -826,9 +828,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
                 1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
                 usually at the expense of lower image quality.
-            cfg_star_rescale (`bool`, *optional*, defaults to `False`):
-                If set to `True`, applies the CFG star rescale. Scales the negative prediction according to dot
-                product between positive and negative.
             num_images_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
             height (`int`, *optional*, defaults to self.unet.config.sample_size):
@@ -876,6 +875,10 @@ class LTXVideoPipeline(DiffusionPipeline):
                 If set to `True`, the sampling is stochastic. If set to `False`, the sampling is deterministic.
             media_items ('torch.Tensor', *optional*):
                 The input media item used for image-to-image / video-to-video.
+                When provided, they will be noised according to 'strength' and then fully denoised.
+            strength ('floaty', *optional* defaults to 1.0):
+                The editing level in image-to-image / video-to-video. The provided input will be noised
+                to this level.
         Examples:
 
         Returns:
@@ -932,12 +935,8 @@ class LTXVideoPipeline(DiffusionPipeline):
         if isinstance(self.scheduler, TimestepShifter):
             retrieve_timesteps_kwargs["samples_shape"] = latent_shape
 
-        assert (
-            skip_initial_inference_steps == 0
-            or latents is not None
-            or media_items is not None
-        ), (
-            f"skip_initial_inference_steps ({skip_initial_inference_steps}) is used for image-to-image/video-to-video - "
+        assert strength == 1.0 or latents is not None or media_items is not None, (
+            "strength < 1 is used for image-to-image/video-to-video - "
             "media_item or latents should be provided."
         )
 
@@ -946,11 +945,11 @@ class LTXVideoPipeline(DiffusionPipeline):
             num_inference_steps,
             device,
             timesteps,
+            max_timestep=strength,
             skip_initial_inference_steps=skip_initial_inference_steps,
-            skip_final_inference_steps=skip_final_inference_steps,
+            skip_final_inference_steps=skip_final_inference_steps,            
             **retrieve_timesteps_kwargs,
         )
-
         if self.allowed_inference_steps is not None:
             for timestep in [round(x, 4) for x in timesteps.tolist()]:
                 assert (
@@ -1026,50 +1025,11 @@ class LTXVideoPipeline(DiffusionPipeline):
                     for skip_blocks in skip_block_list
                 ]
 
-        if enhance_prompt:
-            self.prompt_enhancer_image_caption_model = (
-                self.prompt_enhancer_image_caption_model.to(self._execution_device)
-            )
-            self.prompt_enhancer_llm_model = self.prompt_enhancer_llm_model.to(
-                self._execution_device
-            )
 
-            prompt = generate_cinematic_prompt(
-                self.prompt_enhancer_image_caption_model,
-                self.prompt_enhancer_image_caption_processor,
-                self.prompt_enhancer_llm_model,
-                self.prompt_enhancer_llm_tokenizer,
-                prompt,
-                conditioning_items,
-                max_new_tokens=text_encoder_max_tokens,
-            )
+        # if offload_to_cpu and self.text_encoder is not None:
+        #     self.text_encoder = self.text_encoder.cpu()
 
-        # 3. Encode input prompt
-        if self.text_encoder is not None:
-            self.text_encoder = self.text_encoder.to(self._execution_device)
-
-        (
-            prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_embeds,
-            negative_prompt_attention_mask,
-        ) = self.encode_prompt(
-            prompt,
-            do_classifier_free_guidance,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            device=device,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            prompt_attention_mask=prompt_attention_mask,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-            text_encoder_max_tokens=text_encoder_max_tokens,
-        )
-
-        if offload_to_cpu and self.text_encoder is not None:
-            self.text_encoder = self.text_encoder.cpu()
-
-        self.transformer = self.transformer.to(self._execution_device)
+        # self.transformer = self.transformer.to(self._execution_device)
 
         prompt_embeds_batch = prompt_embeds
         prompt_attention_mask_batch = prompt_attention_mask
@@ -1078,7 +1038,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 [negative_prompt_embeds, prompt_embeds], dim=0
             )
             prompt_attention_mask_batch = torch.cat(
-                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+                [negative_prompt_attention_mask.to("cuda"), prompt_attention_mask], dim=0
             )
         if do_spatio_temporal_guidance:
             prompt_embeds_batch = torch.cat([prompt_embeds_batch, prompt_embeds], dim=0)
@@ -1098,7 +1058,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             media_items=media_items,
             timestep=timesteps[0],
             latent_shape=latent_shape,
-            dtype=prompt_embeds_batch.dtype,
+            dtype=torch.float32 if mixed_precision else prompt_embeds_batch.dtype,
             device=device,
             generator=generator,
             vae_per_channel_normalize=vae_per_channel_normalize,
@@ -1118,13 +1078,14 @@ class LTXVideoPipeline(DiffusionPipeline):
         )
         init_latents = latents.clone()  # Used for image_cond_noise_update
 
-        pixel_coords = torch.cat([pixel_coords] * num_conds)
+        # pixel_coords = torch.cat([pixel_coords] * num_conds)
         orig_conditioning_mask = conditioning_mask
         if conditioning_mask is not None and is_video:
             assert num_images_per_prompt == 1
             conditioning_mask = torch.cat([conditioning_mask] * num_conds)
         fractional_coords = pixel_coords.to(torch.float32)
         fractional_coords[:, 0] = fractional_coords[:, 0] * (1.0 / frame_rate)
+        freqs_cis = self.transformer.precompute_freqs_cis(fractional_coords)
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -1133,6 +1094,11 @@ class LTXVideoPipeline(DiffusionPipeline):
         num_warmup_steps = max(
             len(timesteps) - num_inference_steps * self.scheduler.order, 0
         )
+        cfg_star_rescale = True
+
+
+        if callback != None:
+            callback(-1, None, True, override_num_inference_steps = num_inference_steps, pass_no =pass_no)
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -1147,7 +1113,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     )
 
                 latent_model_input = (
-                    torch.cat([latents] * num_conds) if num_conds > 1 else latents
+                        torch.cat([latents] * num_conds) if num_conds > 1 else latents
                 )
                 latent_model_input = self.scheduler.scale_model_input(
                     latent_model_input, t
@@ -1185,7 +1151,7 @@ class LTXVideoPipeline(DiffusionPipeline):
 
                 # Choose the appropriate context manager based on `mixed_precision`
                 if mixed_precision:
-                    context_manager = torch.autocast(device.type, dtype=torch.bfloat16)
+                    context_manager = torch.autocast(device.type, dtype=self.transformer.dtype)
                 else:
                     context_manager = nullcontext()  # Dummy context manager
 
@@ -1193,7 +1159,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 with context_manager:
                     noise_pred = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
-                        indices_grid=fractional_coords,
+                        freqs_cis=freqs_cis,
                         encoder_hidden_states=prompt_embeds_batch.to(
                             self.transformer.dtype
                         ),
@@ -1205,31 +1171,33 @@ class LTXVideoPipeline(DiffusionPipeline):
                             else None
                         ),
                         skip_layer_strategy=skip_layer_strategy,
+                        latent_shape = latent_shape[2:],
+                        joint_pass = joint_pass,
+                        ltxv_model = ltxv_model,
+                        mixed = mixed_precision,
                         return_dict=False,
                     )[0]
-
+                if noise_pred == None:
+                    return None
                 # perform guidance
                 if do_spatio_temporal_guidance:
                     noise_pred_text, noise_pred_text_perturb = noise_pred.chunk(
                         num_conds
                     )[-2:]
-                if do_classifier_free_guidance:
+                if do_classifier_free_guidance and guidance_scale[i] !=0 and guidance_scale[i] !=1 :
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(num_conds)[:2]
-
                     if cfg_star_rescale:
-                        # Rescales the unconditional noise prediction using the projection of the conditional prediction onto it:
-                        # α = (⟨ε_text, ε_uncond⟩ / ||ε_uncond||²), then ε_uncond ← α * ε_uncond
-                        # where ε_text is the conditional noise prediction and ε_uncond is the unconditional one.
+                        batch_size = noise_pred_text.shape[0]
+
                         positive_flat = noise_pred_text.view(batch_size, -1)
                         negative_flat = noise_pred_uncond.view(batch_size, -1)
                         dot_product = torch.sum(
                             positive_flat * negative_flat, dim=1, keepdim=True
                         )
-                        squared_norm = (
-                            torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
-                        )
+                        squared_norm = torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
                         alpha = dot_product / squared_norm
                         noise_pred_uncond = alpha * noise_pred_uncond
+
 
                     noise_pred = noise_pred_uncond + guidance_scale[i] * (
                         noise_pred_text - noise_pred_uncond
@@ -1272,6 +1240,12 @@ class LTXVideoPipeline(DiffusionPipeline):
                     stochastic_sampling=stochastic_sampling,
                 )
 
+                if callback is not None:
+                    # callback(i, None, False, pass_no =pass_no)
+                    preview_latents= latents.squeeze(0).transpose(0, 1)
+                    preview_latents= preview_latents.reshape(preview_latents.shape[0], latent_num_frames, latent_height, latent_width) 
+                    callback(i, preview_latents, False, pass_no =pass_no)
+                    preview_latents = None
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
@@ -1281,10 +1255,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 if callback_on_step_end is not None:
                     callback_on_step_end(self, i, t, {})
 
-        if offload_to_cpu:
-            self.transformer = self.transformer.cpu()
-            if self._execution_device == "cuda":
-                torch.cuda.empty_cache()
 
         # Remove the added conditioning latents
         latents = latents[:, num_cond_latents:]
@@ -1315,6 +1285,8 @@ class LTXVideoPipeline(DiffusionPipeline):
                 )
             else:
                 decode_timestep = None
+            torch.save(latents, "lala.pt")
+            # latents = torch.load("lala.pt")
             image = vae_decode(
                 latents,
                 self.vae,
@@ -1328,13 +1300,11 @@ class LTXVideoPipeline(DiffusionPipeline):
         else:
             image = latents
 
-        # Offload all models
-        self.maybe_free_model_hooks()
 
         if not return_dict:
             return (image,)
 
-        return ImagePipelineOutput(images=image)
+        return image
 
     def denoising_step(
         self,
@@ -1736,7 +1706,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         num_frames = (num_frames - 1) // scale_factor * scale_factor + 1
         return num_frames
 
-
 def adain_filter_latent(
     latents: torch.Tensor, reference_latents: torch.Tensor, factor=1.0
 ):
@@ -1768,11 +1737,30 @@ def adain_filter_latent(
     return result
 
 
+
 class LTXMultiScalePipeline:
+    @staticmethod
+    def batch_normalize(latents, reference, factor = 0.25):
+        latents_copy = latents.clone()
+        t = latents_copy   #  B x C x F x H x W
+
+        for i in range(t.size(0)):  # batch
+            for c in range(t.size(1)):  # channel
+                r_sd, r_mean = torch.std_mean(
+                    reference[i, c], dim=None
+                )  # index by original dim order
+                i_sd, i_mean = torch.std_mean(t[i, c], dim=None)
+
+                t[i, c] = ((t[i, c] - i_mean) / i_sd) * r_sd + r_mean
+
+        latents_copy  = torch.lerp(latents, t, factor)
+        return latents_copy
+
+
     def _upsample_latents(
         self, latest_upsampler: LatentUpsampler, latents: torch.Tensor
     ):
-        assert latents.device == latest_upsampler.device
+        # assert latents.device == latest_upsampler.device
 
         latents = un_normalize_latents(
             latents, self.vae, vae_per_channel_normalize=True
@@ -1782,6 +1770,7 @@ class LTXMultiScalePipeline:
             upsampled_latents, self.vae, vae_per_channel_normalize=True
         )
         return upsampled_latents
+
 
     def __init__(
         self, video_pipeline: LTXVideoPipeline, latent_upsampler: LatentUpsampler
@@ -1798,6 +1787,8 @@ class LTXMultiScalePipeline:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        video_pipeline = self.video_pipeline
+
         original_kwargs = kwargs.copy()
         original_output_type = kwargs["output_type"]
         original_width = kwargs["width"]
@@ -1807,31 +1798,98 @@ class LTXMultiScalePipeline:
         downscaled_width = x_width - (x_width % self.video_pipeline.vae_scale_factor)
         x_height = int(kwargs["height"] * downscale_factor)
         downscaled_height = x_height - (x_height % self.video_pipeline.vae_scale_factor)
-
+        trans = video_pipeline.transformer
         kwargs["output_type"] = "latent"
         kwargs["width"] = downscaled_width
         kwargs["height"] = downscaled_height
+
+
+        VAE_tile_size = kwargs["VAE_tile_size"]
+
+        z_tile, hw_tile = VAE_tile_size
+
+        if z_tile > 0: 
+            self.vae.enable_z_tiling(z_tile)  
+        if hw_tile > 0: 
+            self.vae.enable_hw_tiling()
+            self.vae.set_tiling_params(hw_tile)
+  
+        ltxv_model = kwargs["ltxv_model"]
+        text_encoder_max_tokens = 256
+        prompt = kwargs.pop("prompt")
+        negative_prompt = kwargs.pop("negative_prompt")
+        if False and kwargs["enhance_prompt"]:
+            prompt = generate_cinematic_prompt(
+                video_pipeline.prompt_enhancer_image_caption_model,
+                video_pipeline.prompt_enhancer_image_caption_processor,
+                video_pipeline.prompt_enhancer_llm_model,
+                video_pipeline.prompt_enhancer_llm_tokenizer,
+                prompt,
+                kwargs["conditioning_items"],
+                max_new_tokens=text_encoder_max_tokens,
+            )
+            print("Enhanced prompt: " + prompt[0])
+
+        # Encode input prompt
+
+        (
+            prompt_embeds,
+            prompt_attention_mask,
+            negative_prompt_embeds,
+            negative_prompt_attention_mask,
+        ) = video_pipeline.encode_prompt(
+            prompt,
+            True,
+            negative_prompt=negative_prompt,
+            device=kwargs["device"],
+            text_encoder_max_tokens=text_encoder_max_tokens,
+        )
+        if ltxv_model._interrupt:
+            return None
+
+        kwargs["prompt_embeds"] = prompt_embeds
+        kwargs["prompt_attention_mask"] = prompt_attention_mask
+        kwargs["negative_prompt_embeds"] = negative_prompt_embeds
+        kwargs["negative_prompt_attention_mask"] = negative_prompt_attention_mask
+
+        original_kwargs = kwargs.copy()
+
+        kwargs["joint_pass"] = True
+        kwargs["pass_no"] = 1
+
+
         kwargs.update(**first_pass)
-        result = self.video_pipeline(*args, **kwargs)
-        latents = result.images
+        kwargs["num_inference_steps"] = kwargs["num_inference_steps1"] 
+        result = video_pipeline(*args, **kwargs)
+        if result == None:
+            return None
+
+        latents = result
 
         upsampled_latents = self._upsample_latents(self.latent_upsampler, latents)
+
         upsampled_latents = adain_filter_latent(
             latents=upsampled_latents, reference_latents=latents
-        )
+        )        
+        # upsampled_latents = self.batch_normalize(upsampled_latents, latents)
 
         kwargs = original_kwargs
-
         kwargs["latents"] = upsampled_latents
         kwargs["output_type"] = original_output_type
         kwargs["width"] = downscaled_width * 2
         kwargs["height"] = downscaled_height * 2
-        kwargs.update(**second_pass)
+        kwargs["joint_pass"] = False
+        kwargs["pass_no"] = 2
 
-        result = self.video_pipeline(*args, **kwargs)
+        kwargs.update(**second_pass)
+        kwargs["num_inference_steps"] = kwargs["num_inference_steps2"] 
+
+        result = video_pipeline(*args, **kwargs)
+        if result == None:
+            return None
         if original_output_type != "latent":
-            num_frames = result.images.shape[2]
-            videos = rearrange(result.images, "b c f h w -> (b f) c h w")
+            num_frames = result.shape[2]
+            videos = rearrange(result, "b c f h w -> (b f) c h w")
 
             videos = F.interpolate(
                 videos,
@@ -1840,6 +1898,6 @@ class LTXMultiScalePipeline:
                 align_corners=False,
             )
             videos = rearrange(videos, "(b f) c h w -> b c f h w", f=num_frames)
-            result.images = videos
+            result = videos
 
         return result

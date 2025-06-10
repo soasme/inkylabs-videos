@@ -19,7 +19,7 @@ from diffusers.utils import deprecate, logging
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from einops import rearrange
 from torch import nn
-
+from wan.modules.attention import pay_attention
 from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 
 try:
@@ -32,6 +32,13 @@ except ImportError:
 # code adapted from  https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention.py
 
 logger = logging.get_logger(__name__)
+
+def reshape_hidden_states(hidden_states, latent_frames):
+    return hidden_states.reshape(hidden_states.shape[0], latent_frames, -1, hidden_states.shape[-1] )
+	
+
+def restore_hidden_states_shape(hidden_states):
+    return hidden_states.reshape(hidden_states.shape[0], -1, hidden_states.shape[-1] )
 
 
 @maybe_allow_in_graph
@@ -218,6 +225,8 @@ class BasicTransformerBlock(nn.Module):
         # Notice that normalization is always applied before the real computation in the following blocks.
         # 0. Self-Attention
         batch_size = hidden_states.shape[0]
+        if skip_layer_mask != None and skip_layer_mask.flatten().min() == 1.0:
+            skip_layer_mask = None
 
         original_hidden_states = hidden_states
 
@@ -231,10 +240,16 @@ class BasicTransformerBlock(nn.Module):
                 batch_size, timestep.shape[1], num_ada_params, -1
             )
             if self.adaptive_norm == "single_scale_shift":
+                ada_values = ada_values.unsqueeze(-2)
                 shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
                     ada_values.unbind(dim=2)
                 )
-                norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
+                norm_hidden_states = reshape_hidden_states(norm_hidden_states, scale_msa.shape[1])
+                norm_hidden_states *= 1 + scale_msa 
+                norm_hidden_states += shift_msa
+                # norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
+                norm_hidden_states = restore_hidden_states_shape(norm_hidden_states)
+
             else:
                 scale_msa, gate_msa, scale_mlp, gate_mlp = ada_values.unbind(dim=2)
                 norm_hidden_states = norm_hidden_states * (1 + scale_msa)
@@ -251,9 +266,10 @@ class BasicTransformerBlock(nn.Module):
         cross_attention_kwargs = (
             cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         )
-
+        norm_hidden_states_wrapper = [norm_hidden_states]
+        del norm_hidden_states
         attn_output = self.attn1(
-            norm_hidden_states,
+            norm_hidden_states_wrapper,
             freqs_cis=freqs_cis,
             encoder_hidden_states=(
                 encoder_hidden_states if self.only_cross_attention else None
@@ -264,9 +280,13 @@ class BasicTransformerBlock(nn.Module):
             **cross_attention_kwargs,
         )
         if gate_msa is not None:
-            attn_output = gate_msa * attn_output
+            attn_output = reshape_hidden_states(attn_output, gate_msa.shape[1])
+            # attn_output = gate_msa * attn_output
+            attn_output *= gate_msa 
+            attn_output = restore_hidden_states_shape(attn_output)
 
-        hidden_states = attn_output + hidden_states
+        hidden_states += attn_output
+        del attn_output
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.squeeze(1)
 
@@ -276,19 +296,28 @@ class BasicTransformerBlock(nn.Module):
                 attn_input = self.attn2_norm(hidden_states)
             else:
                 attn_input = hidden_states
+
+            attn_input_wrapper = [attn_input]
+            del attn_input
+
             attn_output = self.attn2(
-                attn_input,
+                attn_input_wrapper,
                 freqs_cis=freqs_cis,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=encoder_attention_mask,
                 **cross_attention_kwargs,
             )
-            hidden_states = attn_output + hidden_states
+            hidden_states += attn_output 
+            del attn_output
 
         # 4. Feed-forward
         norm_hidden_states = self.norm2(hidden_states)
         if self.adaptive_norm == "single_scale_shift":
-            norm_hidden_states = norm_hidden_states * (1 + scale_mlp) + shift_mlp
+            norm_hidden_states = reshape_hidden_states(norm_hidden_states, scale_mlp.shape[1])
+            # norm_hidden_states = norm_hidden_states * (1 + scale_mlp) + shift_mlp
+            norm_hidden_states *= 1 + scale_mlp
+            norm_hidden_states += shift_mlp
+            norm_hidden_states = restore_hidden_states_shape(norm_hidden_states)
         elif self.adaptive_norm == "single_scale":
             norm_hidden_states = norm_hidden_states * (1 + scale_mlp)
         elif self.adaptive_norm == "none":
@@ -302,9 +331,22 @@ class BasicTransformerBlock(nn.Module):
                 self.ff, norm_hidden_states, self._chunk_dim, self._chunk_size
             )
         else:
-            ff_output = self.ff(norm_hidden_states)
+            h_shape = norm_hidden_states.shape
+            norm_hidden_states = norm_hidden_states.view(-1, h_shape[-1])
+            chunk_size = int(norm_hidden_states.shape[0]/4)
+            chunks =torch.split(norm_hidden_states, chunk_size)
+            for h_chunk  in chunks:
+                mlp_chunk = self.ff.net[0](h_chunk)
+                h_chunk[...] = self.ff.net[2](mlp_chunk)
+                del mlp_chunk 
+            ff_output = norm_hidden_states.view(h_shape)
+            del norm_hidden_states
+
         if gate_mlp is not None:
-            ff_output = gate_mlp * ff_output
+            ff_output = reshape_hidden_states(ff_output, gate_mlp.shape[1])
+            # ff_output = gate_mlp * ff_output
+            ff_output *= gate_mlp
+            ff_output = restore_hidden_states_shape(ff_output)
 
         hidden_states = ff_output + hidden_states
         if hidden_states.ndim == 4:
@@ -944,7 +986,7 @@ class AttnProcessor2_0:
     def __call__(
         self,
         attn: Attention,
-        hidden_states: torch.FloatTensor,
+        hidden_states_wrapper: torch.FloatTensor,
         freqs_cis: Tuple[torch.FloatTensor, torch.FloatTensor],
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
@@ -957,7 +999,8 @@ class AttnProcessor2_0:
         if len(args) > 0 or kwargs.get("scale", None) is not None:
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
             deprecate("scale", "1.0.0", deprecation_message)
-
+        hidden_states = hidden_states_wrapper[0]
+        hidden_states_wrapper.clear()
         residual = hidden_states
         if attn.spatial_norm is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
@@ -996,7 +1039,6 @@ class AttnProcessor2_0:
 
         query = attn.to_q(hidden_states)
         query = attn.q_norm(query)
-
         if encoder_hidden_states is not None:
             if attn.norm_cross:
                 encoder_hidden_states = attn.norm_encoder_hidden_states(
@@ -1011,9 +1053,16 @@ class AttnProcessor2_0:
             if attn.use_rope:
                 key = attn.apply_rotary_emb(key, freqs_cis)
                 query = attn.apply_rotary_emb(query, freqs_cis)
-
+        if not (skip_layer_mask is not None and skip_layer_strategy == SkipLayerStrategy.AttentionSkip):
+            del hidden_states
+        skip_attention = False
         value = attn.to_v(encoder_hidden_states)
-        value_for_stg = value
+        if skip_layer_mask is not None and skip_layer_strategy == SkipLayerStrategy.AttentionValues:
+            skip_attention =  skip_layer_mask.shape[0] == 1 and skip_layer_mask[0].item() == 0
+            value_for_stg = value
+
+        del encoder_hidden_states
+
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -1021,10 +1070,14 @@ class AttnProcessor2_0:
         query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        dtype = query.dtype
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-
-        if attn.use_tpu_flash_attention:  # use tpu attention offload 'flash attention'
+        if skip_attention:
+            hidden_states = value_for_stg
+            hidden_states_a = None
+            value_for_stg = None
+        elif attn.use_tpu_flash_attention:  # use tpu attention offload 'flash attention'
             q_segment_indexes = None
             if (
                 attention_mask is not None
@@ -1054,38 +1107,42 @@ class AttnProcessor2_0:
                 kv_segment_ids=attention_mask,
                 sm_scale=attn.scale,
             )
+            del query, key, value
         else:
-            hidden_states_a = F.scaled_dot_product_attention(
-                query,
-                key,
-                value,
-                attn_mask=attention_mask,
-                dropout_p=0.0,
-                is_causal=False,
+            query = query.transpose(1,2)
+            key = key.transpose(1,2)
+            value = value.transpose(1,2)
+            if attention_mask != None:
+                attention_mask = attention_mask.transpose(1,2)
+            qkv_list = [query, key, value]
+            del query, key, value
+            hidden_states_a = pay_attention(qkv_list, attention_mask =attention_mask)
+            hidden_states_a = hidden_states_a.transpose(1,2)
+        if hidden_states_a != None:
+            hidden_states_a = hidden_states_a.transpose(1, 2).reshape(
+                batch_size, -1, attn.heads * head_dim
             )
+            hidden_states_a = hidden_states_a.to(dtype)
 
-        hidden_states_a = hidden_states_a.transpose(1, 2).reshape(
-            batch_size, -1, attn.heads * head_dim
-        )
-        hidden_states_a = hidden_states_a.to(query.dtype)
-
-        if (
-            skip_layer_mask is not None
-            and skip_layer_strategy == SkipLayerStrategy.AttentionSkip
-        ):
-            hidden_states = hidden_states_a * skip_layer_mask + hidden_states * (
-                1.0 - skip_layer_mask
-            )
-        elif (
-            skip_layer_mask is not None
-            and skip_layer_strategy == SkipLayerStrategy.AttentionValues
-        ):
-            hidden_states = hidden_states_a * skip_layer_mask + value_for_stg * (
-                1.0 - skip_layer_mask
-            )
-        else:
-            hidden_states = hidden_states_a
-
+            if (
+                skip_layer_mask is not None
+                and skip_layer_strategy == SkipLayerStrategy.AttentionSkip
+            ):
+                hidden_states = hidden_states_a * skip_layer_mask + hidden_states * (
+                    1.0 - skip_layer_mask
+                )
+            elif (
+                skip_layer_mask is not None
+                and skip_layer_strategy == SkipLayerStrategy.AttentionValues
+            ):
+                hidden_states_a *= skip_layer_mask
+                value_for_stg *=  1.0 - skip_layer_mask
+                hidden_states_a +=  value_for_stg
+                hidden_states = hidden_states_a
+                del value_for_stg
+            else:
+                hidden_states = hidden_states_a
+            hidden_states_a = None
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
         # dropout
@@ -1110,7 +1167,8 @@ class AttnProcessor2_0:
             else:
                 hidden_states = hidden_states + residual
 
-        hidden_states = hidden_states / attn.rescale_output_factor
+        if attn.rescale_output_factor != 1.0:
+            hidden_states /= attn.rescale_output_factor
 
         return hidden_states
 
