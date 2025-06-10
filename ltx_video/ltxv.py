@@ -568,6 +568,25 @@ def load_media_file(
     return media_tensor
 
 
+
+# Main
+DATA_DIR = "ckpts"
+from huggingface_hub import hf_hub_download, snapshot_download 
+
+def process_files_def(repoId, sourceFolderList, fileList):
+    targetRoot = "ckpts/" 
+    for sourceFolder, files in zip(sourceFolderList,fileList ):
+        if len(files)==0:
+            if not Path(targetRoot + sourceFolder).exists():
+                snapshot_download(repo_id=repoId,  allow_patterns=sourceFolder +"/*", local_dir= targetRoot)
+        else:
+            for onefile in files:     
+                if len(sourceFolder) > 0: 
+                    if not os.path.isfile(targetRoot + sourceFolder + "/" + onefile ):          
+                        hf_hub_download(repo_id=repoId,  filename=onefile, local_dir = targetRoot, subfolder=sourceFolder)
+                else:
+                    if not os.path.isfile(targetRoot + onefile ):          
+                        hf_hub_download(repo_id=repoId,  filename=onefile, local_dir = targetRoot)
 def main():
     parser = argparse.ArgumentParser(
         description="Load models from separate directories and run the pipeline."
@@ -677,8 +696,20 @@ def main():
 
     args = parser.parse_args()
     logger.warning(f"Running generation with arguments: {args}")
-    
-    # Create pipeline and generate video.
+
+    # Download these files using huggingface_hub if they do not exist
+    process_files_def(
+        repoId="DeepBeepMeep/LTX_Video",
+        sourceFolderList=["Florence2", "Llama3_2"],
+        fileList=[
+            [
+                "config.json", "configuration_florence2.py", "model.safetensors", "modeling_florence2.py", "preprocessor_config.json", "processing_florence2.py", "tokenizer.json", "tokenizer_config.json"
+            ],
+            [
+                "config.json", "generation_config.json", "Llama3_2_quanto_bf16_int8.safetensors", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"
+            ]
+        ]
+    )
     # 1. Initialize pipeline
     model_filepath = [args.pipeline_config] if args.pipeline_config else ["ckpts/ltxv-13b-0.9.7-distilled.safetensors"]
     text_encoder_filepath = "ckpts/T5_xxl_1.1_enc_bf16.safetensors"  # Adjust path as needed
