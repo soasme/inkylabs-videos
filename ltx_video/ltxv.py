@@ -568,5 +568,168 @@ def load_media_file(
     return media_tensor
 
 
+def main():
+    parser = argparse.ArgumentParser(
+        description="Load models from separate directories and run the pipeline."
+    )
+
+    # Directories
+    parser.add_argument(
+        "--output_path",
+        type=str,
+        default=None,
+        help="Path to the folder to save output video, if None will save in outputs/ directory.",
+    )
+    parser.add_argument("--seed", type=int, default="171198")
+
+    # Pipeline parameters
+    parser.add_argument(
+        "--num_images_per_prompt",
+        type=int,
+        default=1,
+        help="Number of images per prompt",
+    )
+    parser.add_argument(
+        "--image_cond_noise_scale",
+        type=float,
+        default=0.15,
+        help="Amount of noise to add to the conditioned image",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=704,
+        help="Height of the output video frames. Optional if an input image provided.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=1216,
+        help="Width of the output video frames. If None will infer from input image.",
+    )
+    parser.add_argument(
+        "--num_frames",
+        type=int,
+        default=121,
+        help="Number of frames to generate in the output video",
+    )
+    parser.add_argument(
+        "--frame_rate", type=int, default=30, help="Frame rate for the output video"
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Device to run inference on. If not specified, will automatically detect and use CUDA or MPS if available, else CPU.",
+    )
+    parser.add_argument(
+        "--pipeline_config",
+        type=str,
+        default="configs/ltxv-13b-0.9.7-dev.yaml",
+        help="The path to the config file for the pipeline, which contains the parameters for the pipeline",
+    )
+
+    # Prompts
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        help="Text prompt to guide generation",
+    )
+    parser.add_argument(
+        "--negative_prompt",
+        type=str,
+        default="worst quality, inconsistent motion, blurry, jittery, distorted",
+        help="Negative prompt for undesired features",
+    )
+
+    parser.add_argument(
+        "--offload_to_cpu",
+        action="store_true",
+        help="Offloading unnecessary computations to CPU.",
+    )
+
+    # video-to-video arguments:
+    parser.add_argument(
+        "--input_media_path",
+        type=str,
+        default=None,
+        help="Path to the input video (or imaage) to be modified using the video-to-video pipeline",
+    )
+
+    # Conditioning arguments
+    parser.add_argument(
+        "--conditioning_media_paths",
+        type=str,
+        nargs="*",
+        help="List of paths to conditioning media (images or videos). Each path will be used as a conditioning item.",
+    )
+    parser.add_argument(
+        "--conditioning_strengths",
+        type=float,
+        nargs="*",
+        help="List of conditioning strengths (between 0 and 1) for each conditioning item. Must match the number of conditioning items.",
+    )
+    parser.add_argument(
+        "--conditioning_start_frames",
+        type=int,
+        nargs="*",
+        help="List of frame indices where each conditioning item should be applied. Must match the number of conditioning items.",
+    )
+
+    args = parser.parse_args()
+    logger.warning(f"Running generation with arguments: {args}")
+    
+    # Create pipeline and generate video.
+    # 1. Initialize pipeline
+    model_filepath = [args.pipeline_config] if args.pipeline_config else ["ckpts/ltxv-13b-0.9.7-distilled.safetensors"]
+    text_encoder_filepath = "ckpts/T5_xxl_1.1_enc_bf16.safetensors"  # Adjust path as needed
+
+    ltxv = LTXV(
+        model_filepath=model_filepath,
+        text_encoder_filepath=text_encoder_filepath,
+        dtype=torch.bfloat16,
+        VAE_dtype=torch.bfloat16,
+        mixed_precision_transformer=False,
+    )
+
+    # 2. Prepare image/video conditioning if provided
+    image_start = None
+    input_video = None
+    if args.input_media_path:
+        if args.input_media_path.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+            image_start = [Image.open(args.input_media_path).convert("RGB")]
+        else:
+            input_video = args.input_media_path
+
+    # 3. Generate video
+    video_tensor = ltxv.generate(
+        input_prompt=args.prompt,
+        n_prompt=args.negative_prompt,
+        image_start=image_start,
+        input_video=input_video,
+        sampling_steps=args.num_frames,
+        seed=args.seed,
+        height=args.height,
+        width=args.width,
+        frame_num=args.num_frames,
+        frame_rate=args.frame_rate,
+        input_media_path=args.input_media_path,
+        device=args.device,
+    )
+
+    # 4. Save video
+    output_dir = args.output_path or "outputs"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"ltxv_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+
+    # Convert tensor to numpy and save as video
+    if video_tensor is not None:
+        # video_tensor: (C, T, H, W) or (3, num_frames, H, W)
+        video_np = (video_tensor.permute(1, 2, 3, 0).cpu().numpy() * 127.5 + 127.5).clip(0, 255).astype(np.uint8)
+        # video_np: (num_frames, H, W, 3)
+        imageio.mimsave(output_path, video_np, fps=args.frame_rate)
+        print(f"Video saved to {output_path}")
+    else:
+        print("Video generation failed.")
+
 if __name__ == "__main__":
     main()
